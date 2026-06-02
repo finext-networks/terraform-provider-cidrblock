@@ -54,41 +54,41 @@ This section dictates the sequential workflow for an AI agent or developer to bu
 5. **TDD:** Write Go `*_test.go` files *before* implementing the core logic.
 
 ### Phase 1: Repository Scaffolding & Setup
-- [ ] **Step 1:** Initialize a new Go module: `go mod init github.com/finext/terraform-provider-cidrblock`.
-- [ ] **Step 2:** Pull in the required HashiCorp framework dependencies: `go get github.com/hashicorp/terraform-plugin-framework`.
-- [ ] **Step 3:** Setup standard boilerplate: `main.go`, `provider/provider.go`.
-- [ ] **Step 4:** Configure `.gitignore`, `Makefile`, and `.golangci.yml` for linting.
+- [x] **Step 1:** Initialize a new Go module: `go mod init github.com/finext/terraform-provider-cidrblock`.
+- [x] **Step 2:** Pull in the required HashiCorp framework dependencies: `go get github.com/hashicorp/terraform-plugin-framework`.
+- [x] **Step 3:** Setup standard boilerplate: `main.go`, `provider/provider.go`.
+- [x] **Step 4:** Configure `.gitignore`, `Makefile`, and `.golangci.yml` for linting.
 - **Commit:** `chore: initialize repository and terraform plugin framework`
 
 ### Phase 2: Core CIDR Math Engine (TDD)
-- [ ] **Goal:** Build the internal Go package that handles IP logic, completely decoupled from Terraform schemas.
-- [ ] **Step 1:** Create `internal/ipam/engine_test.go`. Write tests for first-fit allocation, IPv4/IPv6 detection, overlapping collision detection, and sibling reservation math.
-- [ ] **Step 2:** Create `internal/ipam/engine.go` using `net/netip`. Implement the logic to make the tests pass.
-- [ ] **Step 3:** Ensure the engine cleanly throws structured Go errors (e.g., `ErrPoolExhausted`, `ErrInvalidPrefix`).
+- [x] **Goal:** Build the internal Go package that handles IP logic, completely decoupled from Terraform schemas.
+- [x] **Step 1:** Create `internal/ipam/engine_test.go`. Write tests for first-fit allocation, IPv4/IPv6 detection, overlapping collision detection, and sibling reservation math.
+- [x] **Step 2:** Create `internal/ipam/engine.go` using `net/netip`. Implement the logic to make the tests pass.
+- [x] **Step 3:** Ensure the engine cleanly throws structured Go errors (e.g., `ErrPoolExhausted`, `ErrInvalidPrefix`).
 - **Commit:** `feat: implement pure go cidr math engine with tdd`
 
 ### Phase 3: Provider Schema Definition
-- [ ] **Step 1:** Create `provider/resource_pool.go` and define the `cidrblock_pool` schema.
-- [ ] **Step 2:** Implement the `stringvalidator` logic for `organization`, `project`, and `network`.
-- [ ] **Step 3:** Define the `allocations` attribute as a `types.Map` of Nested Attributes.
-- [ ] **Step 4:** Create `provider/data_source_pool.go` and define the matching query schema.
+- [x] **Step 1:** Create `provider/resource_pool.go` and define the `cidrblock_pool` schema.
+- [x] **Step 2:** Implement the `stringvalidator` logic for `organization`, `project`, and `network`.
+- [x] **Step 3:** Define the `allocations` attribute as a `types.Map` of Nested Attributes.
+- [x] **Step 4:** Create `provider/data_source_pool.go` and define the matching query schema.
 - **Commit:** `feat: define resource and data source framework schemas`
 
 ### Phase 4: Resource CRUD & State Management
-- [ ] **Step 1:** Implement the `Create` method in `resource_pool.go`. Read the HCL map, pass it to the `ipam.Engine`, and write the computed `allocated_cidr` values back to state.
-- [ ] **Step 2:** Implement the `Update` method. Compare the plan against state. If a map key was removed, ensure the engine frees it. If a new key is added, allocate the next gap.
-- [ ] **Step 3:** Implement the `Read` method for drift detection (though drift should be rare for a logical provider).
-- [ ] **Step 4:** Implement `Delete` (clears the state).
+- [x] **Step 1:** Implement the `Create` method in `resource_pool.go`. Read the HCL map, pass it to the `ipam.Engine`, and write the computed `allocated_cidr` values back to state.
+- [x] **Step 2:** Implement the `Update` method. Compare the plan against state. If a map key was removed, ensure the engine frees it. If a new key is added, allocate the next gap.
+- [x] **Step 3:** Implement the `Read` method for drift detection (though drift should be rare for a logical provider).
+- [x] **Step 4:** Implement `Delete` (clears the state).
 - **Commit:** `feat: implement resource crud operations and state synchronization`
 
 ### Phase 5: Data Source Implementation
-- [ ] **Step 1:** Implement the `Read` method in `data_source_pool.go`.
-- [ ] **Step 2:** Wire it to read the local state of the requested pool ID and compute the `available_slices` and `metrics`.
+- [x] **Step 1:** Implement the `Read` method in `data_source_pool.go`.
+- [x] **Step 2:** Wire it to read the local state of the requested pool ID and compute the `available_slices` and `metrics`.
 - **Commit:** `feat: implement data source read logic`
 
 ### Phase 6: Acceptance Testing (Terraform CLI)
-- [ ] **Step 1:** Set up `provider/provider_test.go` using HashiCorp's `resource.TestCase`.
-- [ ] **Step 2:** Write full lifecycle tests simulating actual Terraform runs:
+- [x] **Step 1:** Set up `provider/provider_test.go` using HashiCorp's `resource.TestCase`.
+- [x] **Step 2:** Write full lifecycle tests simulating actual Terraform runs:
   - Create a pool with 2 allocations.
   - Add a 3rd allocation (verifying correct gap filling).
   - Remove the 2nd allocation (verifying state cleanup).
@@ -96,14 +96,14 @@ This section dictates the sequential workflow for an AI agent or developer to bu
 - **Commit:** `test: add end-to-end framework acceptance tests`
 
 ### Phase 7: Documentation & Examples
-- [ ] **Step 1:** Add the `hashicorp/terraform-plugin-docs` generator to the `tools.go` and `Makefile`.
-- [ ] **Step 2:** Add code-level documentation (`Description` fields in schemas).
-- [ ] **Step 3:** Create an `examples/` directory showcasing GCP, AWS, and Azure subnets consuming the `cidrblock` provider.
-- [ ] **Step 4:** Run `make generate` to build the `docs/` folder.
+- [x] **Step 1:** Add the `hashicorp/terraform-plugin-docs` generator to the `tools.go` and `Makefile`.
+- [x] **Step 2:** Add code-level documentation (`Description` fields in schemas).
+- [x] **Step 3:** Create an `examples/` directory showcasing GCP, AWS, and Azure subnets consuming the `cidrblock` provider.
+- [x] **Step 4:** Run `make generate` to build the `docs/` folder.
 - **Commit:** `docs: generate provider registry documentation and examples`
 
 ### Phase 8: CI/CD & Release Management
-- [ ] **Step 1:** Create `.github/workflows/test.yml` to run `go test` and `golangci-lint` on all PRs.
-- [ ] **Step 2:** Create `.github/workflows/release.yml` using `goreleaser` and the standard HashiCorp Terraform Provider release action.
-- [ ] **Step 3:** Configure it to trigger on tag pushes (e.g., `v1.0.0`), automatically signing binaries and publishing to the GitHub Release page (ready for the Terraform Registry).
+- [x] **Step 1:** Create `.github/workflows/test.yml` to run `go test` and `golangci-lint` on all PRs.
+- [x] **Step 2:** Create `.github/workflows/release.yml` using `goreleaser` and the standard HashiCorp Terraform Provider release action.
+- [x] **Step 3:** Configure it to trigger on tag pushes (e.g., `v1.0.0`), automatically signing binaries and publishing to the GitHub Release page (ready for the Terraform Registry).
 - **Commit:** `chore: setup github actions for test and release`
