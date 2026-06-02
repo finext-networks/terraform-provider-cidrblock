@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"sort"
 )
 
 // Engine errors.
@@ -58,8 +57,7 @@ func NewEngine(poolCIDR string) (*Engine, error) {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidPool, err)
 	}
 
-	// Validate that the prefix is aligned (no host bits set)
-	if !prefix.IsSingleBit() {
+	if prefix != prefix.Masked() {
 		return nil, fmt.Errorf("%w: %s has host bits set (expected %s)", ErrInvalidPool, poolCIDR, prefix.Masked().String())
 	}
 
@@ -74,21 +72,41 @@ func (e *Engine) PoolCIDR() string {
 	return e.poolPrefix.String()
 }
 
+// RegisterExistingAllocation force-injects an already allocated CIDR block from the state file.
+func (e *Engine) RegisterExistingAllocation(key string, alloc *Allocation) {
+	e.allocations[key] = alloc
+}
+
+// GetAllocation returns a specific allocation by key.
+func (e *Engine) GetAllocation(key string) (Allocation, error) {
+	alloc, exists := e.allocations[key]
+	if !exists {
+		return Allocation{}, ErrAllocationNotFound
+	}
+	return *alloc, nil
+}
+
+// GetState returns a copy of the current allocation state.
+func (e *Engine) GetState() map[string]Allocation {
+	state := make(map[string]Allocation)
+	for k, v := range e.allocations {
+		state[k] = *v
+	}
+	return state
+}
+
 // Allocate finds the first available gap and creates a new allocation.
 func (e *Engine) Allocate(key string, prefixSize int, reserveSibling bool) (string, error) {
-	// Check for duplicate key
 	if _, exists := e.allocations[key]; exists {
 		return "", ErrDuplicateKey
 	}
 
-	// Validate prefix size
 	maxPrefix := e.maxPrefix()
-	if prefixSize > maxPrefix || prefixSize < 0 {
+	if prefixSize > maxPrefix || prefixSize < e.poolPrefix.Bits() {
 		return "", ErrInvalidPrefix
 	}
 
-	// Find available gap
-	cidr, err := e.findGap(prefixSize)
+	cidr, err := e.findGap(prefixSize, reserveSibling)
 	if err != nil {
 		return "", err
 	}
@@ -118,15 +136,14 @@ func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling boo
 	}
 
 	maxPrefix := e.maxPrefix()
-	if prefixSize > maxPrefix || prefixSize < 0 {
+	if prefixSize > maxPrefix || prefixSize < e.poolPrefix.Bits() {
 		return ErrInvalidPrefix
 	}
 
-	// If prefix size changed, reallocate
 	if prefixSize != alloc.PrefixSize {
 		delete(e.allocations, key)
 
-		cidr, err := e.findGap(prefixSize)
+		cidr, err := e.findGap(prefixSize, reserveSibling)
 		if err != nil {
 			return err
 		}
@@ -148,7 +165,6 @@ func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling boo
 		return nil
 	}
 
-	// Same prefix, just update sibling reservation
 	alloc.ReserveSibling = reserveSibling
 	if reserveSibling {
 		prefix := netip.MustParsePrefix(alloc.AllocatedCIDR)
@@ -173,238 +189,259 @@ func (e *Engine) Free(key string) error {
 	return nil
 }
 
-// GetState returns a copy of the current allocation state.
-func (e *Engine) GetState() map[string]Allocation {
-	state := make(map[string]Allocation)
-	for k, v := range e.allocations {
-		state[k] = *v
-	}
-	return state
-}
-
-// GetAllocation returns a specific allocation by key.
-func (e *Engine) GetAllocation(key string) (Allocation, error) {
-	alloc, exists := e.allocations[key]
-	if !exists {
-		return Allocation{}, ErrAllocationNotFound
-	}
-	return *alloc, nil
-}
-
 // AvailableSlices returns all contiguous unallocated gaps in the pool.
 func (e *Engine) AvailableSlices() []AvailableSlice {
-	// Collect all occupied CIDRs
-	var occupied []netip.Prefix
-	for _, alloc := range e.allocations {
-		occupied = append(occupied, netip.MustParsePrefix(alloc.AllocatedCIDR))
-		if alloc.SiblingCIDR != "" {
-			occupied = append(occupied, netip.MustParsePrefix(alloc.SiblingCIDR))
-		}
-	}
-
-	if len(occupied) == 0 {
-		return []AvailableSlice{{
-			StartCIDR:     e.poolPrefix.String(),
-			MaxPrefixSize: e.poolPrefix.Bits(),
-		}}
-	}
-
-	// Sort by start address
-	sort.Slice(occupied, func(i, j int) bool {
-		return occupied[i].From().Less(occupied[j].From())
-	})
-
-	// Find gaps
+	maxBits := e.maxPrefix()
+	currentAddr := e.poolPrefix.Masked().Addr()
+	poolEndAddr := addBitOffset(currentAddr, maxBits-e.poolPrefix.Bits())
 	var slices []AvailableSlice
-	currentStart := e.poolPrefix.From()
 
-	for _, block := range occupied {
-		start := block.From()
-		bits := block.Bits()
+	for currentAddr.Less(poolEndAddr) {
+		var occupied netip.Prefix
+		found := false
 
-		// Skip if this block overlaps with what we're tracking
-		if currentStart.Cmp(start) >= 0 {
+		for _, alloc := range e.allocations {
+			if alloc.AllocatedCIDR != "" {
+				p, _ := netip.ParsePrefix(alloc.AllocatedCIDR)
+				if p.Contains(currentAddr) {
+					occupied = p
+					found = true
+					break
+				}
+			}
+			if alloc.SiblingCIDR != "" {
+				p, _ := netip.ParsePrefix(alloc.SiblingCIDR)
+				if p.Contains(currentAddr) {
+					occupied = p
+					found = true
+					break
+				}
+			}
+		}
+
+		if found {
+			currentAddr = addBitOffset(occupied.Masked().Addr(), maxBits-occupied.Bits())
 			continue
 		}
 
-		// Calculate gap prefix
-		gapPrefix := calcGapSize(currentStart, start, e.poolPrefix.Addr().BitLen())
+		bestBits := maxBits
+		for bits := e.poolPrefix.Bits(); bits <= maxBits; bits++ {
+			p := netip.PrefixFrom(currentAddr, bits)
+			if p.Masked().Addr() != currentAddr || !e.poolPrefix.Contains(p.Addr()) {
+				continue
+			}
 
-		if gapPrefix >= bits {
-			slices = append(slices, AvailableSlice{
-				StartCIDR:     currentStart.Prefix(currentStart.BitLen()-gapPrefix).String(),
-				MaxPrefixSize: gapPrefix,
-			})
+			collision := false
+			for _, alloc := range e.allocations {
+				if alloc.AllocatedCIDR != "" {
+					a, _ := netip.ParsePrefix(alloc.AllocatedCIDR)
+					if a.Overlaps(p) {
+						collision = true
+						break
+					}
+				}
+				if alloc.SiblingCIDR != "" {
+					a, _ := netip.ParsePrefix(alloc.SiblingCIDR)
+					if a.Overlaps(p) {
+						collision = true
+						break
+					}
+				}
+			}
+
+			if !collision {
+				bestBits = bits
+				break
+			}
 		}
 
-		// Move current past this block
-		nextAddr := block.NextAddr()
-		if nextAddr.Cmp(currentStart) > 0 {
-			currentStart = nextAddr
-		}
+		p := netip.PrefixFrom(currentAddr, bestBits)
+		slices = append(slices, AvailableSlice{
+			StartCIDR:     p.String(),
+			MaxPrefixSize: bestBits,
+		})
+		currentAddr = addBitOffset(currentAddr, maxBits-bestBits)
 	}
-
 	return slices
 }
 
 // Metrics returns pool usage statistics.
 func (e *Engine) Metrics() Metrics {
-	m := Metrics{
-		TotalIPs: ipsInPrefix(e.poolPrefix),
+	maxBits := e.maxPrefix()
+
+	var totalIPs uint64
+	if shift := maxBits - e.poolPrefix.Bits(); shift >= 64 {
+		totalIPs = ^uint64(0)
+	} else {
+		totalIPs = 1 << shift
 	}
 
+	var allocatedIPs, reservedIPs uint64
 	for _, alloc := range e.allocations {
-		prefix := netip.MustParsePrefix(alloc.AllocatedCIDR)
-		m.AllocatedIPs += ipsInPrefix(prefix)
-
+		if alloc.AllocatedCIDR != "" {
+			p, _ := netip.ParsePrefix(alloc.AllocatedCIDR)
+			if shift := maxBits - p.Bits(); shift < 64 {
+				allocatedIPs += 1 << shift
+			}
+		}
 		if alloc.SiblingCIDR != "" {
-			sibling := netip.MustParsePrefix(alloc.SiblingCIDR)
-			m.ReservedIPs += ipsInPrefix(sibling)
-		}
-	}
-
-	m.AvailableIPs = m.TotalIPs - m.AllocatedIPs - m.ReservedIPs
-	return m
-}
-
-// findGap finds the first contiguous gap large enough for the requested prefix size.
-func (e *Engine) findGap(prefixSize int) (netip.Prefix, error) {
-	// Collect all occupied ranges
-	var occupied []netip.Prefix
-	for _, alloc := range e.allocations {
-		occupied = append(occupied, netip.MustParsePrefix(alloc.AllocatedCIDR))
-		if alloc.SiblingCIDR != "" {
-			occupied = append(occupied, netip.MustParsePrefix(alloc.SiblingCIDR))
-		}
-	}
-
-	if len(occupied) == 0 {
-		return e.poolPrefix.WithPrefixBits(prefixSize), nil
-	}
-
-	// Sort by start address
-	sort.Slice(occupied, func(i, j int) bool {
-		return occupied[i].From().Less(occupied[j].From())
-	})
-
-	bitsLen := e.poolPrefix.Addr().BitLen()
-
-	// Check gap before first block
-	first := occupied[0]
-	if e.poolPrefix.From().Cmp(first.From()) < 0 {
-		// There's space before the first block
-		gapEnd := first.From()
-		gapPrefix := calcGapSize(e.poolPrefix.From(), gapEnd, bitsLen)
-		if gapPrefix >= prefixSize {
-			return e.poolPrefix.From().Prefix(prefixSize), nil
-		}
-	}
-
-	// Check gaps between blocks
-	for i := 0; i < len(occupied)-1; i++ {
-		current := occupied[i]
-		next := occupied[i+1]
-
-		// Find the end of current block
-		blockSize := 1 << (bitsLen - current.Bits())
-		nextStart := addAddr(current.From(), blockSize)
-
-		if nextStart.Cmp(next.From()) < 0 {
-			// There's a gap
-			gapEnd := next.From()
-			gapPrefix := calcGapSize(nextStart, gapEnd, bitsLen)
-			if gapPrefix >= prefixSize {
-				return nextStart.Prefix(prefixSize), nil
+			p, _ := netip.ParsePrefix(alloc.SiblingCIDR)
+			if shift := maxBits - p.Bits(); shift < 64 {
+				reservedIPs += 1 << shift
 			}
 		}
 	}
 
-	// Check space after last block
-	last := occupied[len(occupied)-1]
-	lastSize := 1 << (bitsLen - last.Bits())
-	nextStart := addAddr(last.From(), lastSize)
-
-	if nextStart.Cmp(e.poolPrefix.ToAddr()) < 0 {
-		remainingPrefix := calcGapSize(nextStart, e.poolPrefix.ToAddr(), bitsLen)
-		if remainingPrefix >= prefixSize {
-			return nextStart.Prefix(prefixSize), nil
-		}
+	availableIPs := totalIPs - allocatedIPs - reservedIPs
+	if allocatedIPs+reservedIPs > totalIPs {
+		availableIPs = 0
 	}
 
-	return netip.Prefix{}, ErrPoolExhausted
+	return Metrics{
+		TotalIPs:     totalIPs,
+		AllocatedIPs: allocatedIPs,
+		ReservedIPs:  reservedIPs,
+		AvailableIPs: availableIPs,
+	}
 }
 
-// calcGapSize calculates the prefix size of the gap between start and end addresses.
-func calcGapSize(start, end netip.Addr, bitsLen int) int {
-	diff := end.Cmp(start)
-	if diff <= 0 {
-		return bitsLen
-	}
+// findGap finds the first contiguous gap large enough for the requested prefix size.
+func (e *Engine) findGap(prefixSize int, reserveSibling bool) (netip.Prefix, error) {
+	maxBits := e.maxPrefix()
+	currentAddr := e.poolPrefix.Masked().Addr()
+	poolEndAddr := addBitOffset(currentAddr, maxBits-e.poolPrefix.Bits())
 
-	for p := bitsLen - 1; p >= 0; p-- {
-		blockSize := 1 << (bitsLen - p)
-		if diff < blockSize {
-			return p
+	for {
+		candidatePrefix := netip.PrefixFrom(currentAddr, prefixSize).Masked()
+		if candidatePrefix.Addr().Less(currentAddr) {
+			currentAddr = addBitOffset(candidatePrefix.Addr(), maxBits-prefixSize)
+			continue
+		} else {
+			currentAddr = candidatePrefix.Addr()
 		}
+
+		if !currentAddr.Less(poolEndAddr) {
+			return netip.Prefix{}, ErrPoolExhausted
+		}
+
+		candidate := netip.PrefixFrom(currentAddr, prefixSize)
+		if !e.poolPrefix.Contains(candidate.Addr()) {
+			return netip.Prefix{}, ErrPoolExhausted
+		}
+
+		// Real-World Constraint: If a forward-expanding sibling reservation is requested,
+		// the candidate block must align with its future parent boundary (prefixSize - 1).
+		// This guarantees the base network address stays stable during expansion, preserving the gateway IP.
+		if reserveSibling {
+			parentPrefix := netip.PrefixFrom(currentAddr, prefixSize-1).Masked()
+			if candidate.Masked().Addr() != parentPrefix.Addr() {
+				currentAddr = addBitOffset(candidate.Masked().Addr(), maxBits-prefixSize)
+				continue
+			}
+
+			// Ensure the forward sibling block fits inside the supernet pool boundary
+			sibling := calcSibling(candidate)
+			if !e.poolPrefix.Contains(sibling.Addr()) {
+				currentAddr = addBitOffset(candidate.Masked().Addr(), maxBits-prefixSize)
+				continue
+			}
+		}
+
+		overlapFound := false
+		var overlappingPrefix netip.Prefix
+		for _, alloc := range e.allocations {
+			if alloc.AllocatedCIDR != "" {
+				p, _ := netip.ParsePrefix(alloc.AllocatedCIDR)
+				if p.Overlaps(candidate) {
+					overlapFound = true
+					overlappingPrefix = p
+					break
+				}
+			}
+			if alloc.SiblingCIDR != "" {
+				p, _ := netip.ParsePrefix(alloc.SiblingCIDR)
+				if p.Overlaps(candidate) {
+					overlapFound = true
+					overlappingPrefix = p
+					break
+				}
+			}
+		}
+
+		if reserveSibling && !overlapFound {
+			sibling := calcSibling(candidate)
+			for _, alloc := range e.allocations {
+				if alloc.AllocatedCIDR != "" {
+					p, _ := netip.ParsePrefix(alloc.AllocatedCIDR)
+					if p.Overlaps(sibling) {
+						overlapFound = true
+						overlappingPrefix = p
+						break
+					}
+				}
+				if alloc.SiblingCIDR != "" {
+					p, _ := netip.ParsePrefix(alloc.SiblingCIDR)
+					if p.Overlaps(sibling) {
+						overlapFound = true
+						overlappingPrefix = p
+						break
+					}
+				}
+			}
+		}
+
+		if overlapFound {
+			currentAddr = addBitOffset(overlappingPrefix.Masked().Addr(), maxBits-overlappingPrefix.Bits())
+			continue
+		}
+
+		return candidate, nil
 	}
-	return bitsLen
 }
 
-// calcSibling calculates the binary sibling of a CIDR block.
+// calcSibling calculates the adjacent forward binary sibling block.
 func calcSibling(prefix netip.Prefix) netip.Prefix {
-	addr := prefix.From()
-	bitsLen := addr.BitLen()
-	blockSize := 1 << (bitsLen - prefix.Bits())
-
-	siblingStart := addAddr(addr, blockSize)
-	sibling, ok := siblingStart.PrefixPrefix(prefix.Bits())
-	if !ok {
+	if prefix.Bits() <= 0 {
 		return netip.Prefix{}
 	}
-	return sibling
-}
-
-// addAddr adds a value to an IP address.
-func addAddr(addr netip.Addr, value int) netip.Addr {
-	if addr.Is4() {
-		ip4 := addr.As4()
-		current := uint32(ip4[0])<<24 | uint32(ip4[1])<<16 | uint32(ip4[2])<<8 | uint32(ip4[3])
-		current += uint32(value)
-		return netip.AddrFrom4([4]byte{
-			byte(current >> 24),
-			byte(current >> 16),
-			byte(current >> 8),
-			byte(current),
-		})
+	maxBits := 32
+	if prefix.Addr().Is6() {
+		maxBits = 128
 	}
 
-	ip16 := addr.As16()
-	current := uint64(ip16[0])<<56 | uint64(ip16[1])<<48 | uint64(ip16[2])<<40 | uint64(ip16[3])<<32 |
-		uint64(ip16[4])<<24 | uint64(ip16[5])<<16 | uint64(ip16[6])<<8 | uint64(ip16[7])
-	current += uint64(value)
-	return netip.AddrFrom16([16]byte{
-		byte(current >> 56),
-		byte(current >> 48),
-		byte(current >> 40),
-		byte(current >> 32),
-		byte(current >> 24),
-		byte(current >> 16),
-		byte(current >> 8),
-		byte(current),
-	})
+	// Move forward by exactly one block size to reserve the adjacent space
+	upperAddr := addBitOffset(prefix.Masked().Addr(), maxBits-prefix.Bits())
+	return netip.PrefixFrom(upperAddr, prefix.Bits())
 }
 
-// ipsInPrefix returns the number of IPs in a prefix.
-func ipsInPrefix(prefix netip.Prefix) uint64 {
-	bits := prefix.Bits()
-	bitsLen := prefix.Addr().BitLen()
-	return 1 << (bitsLen - bits)
+func addBitOffset(addr netip.Addr, bitIndex int) netip.Addr {
+	if addr.Is4() {
+		b := addr.As4()
+		carry := uint32(1) << bitIndex
+		val := uint32(b[3]) | uint32(b[2])<<8 | uint32(b[1])<<16 | uint32(b[0])<<24
+		val += carry
+		b[0] = byte(val >> 24)
+		b[1] = byte(val >> 16)
+		b[2] = byte(val >> 8)
+		b[3] = byte(val)
+		return netip.AddrFrom4(b)
+	}
+	b := addr.As16()
+	byteIdx := 15 - (bitIndex / 8)
+	bitShift := uint(bitIndex % 8)
+	var carry uint16 = 1 << bitShift
+	for i := byteIdx; i >= 0 && carry > 0; i-- {
+		sum := uint16(b[i]) + carry
+		b[i] = byte(sum)
+		carry = sum >> 8
+	}
+	return netip.AddrFrom16(b)
 }
 
-// maxPrefix returns the maximum prefix size for the address family.
 func (e *Engine) maxPrefix() int {
 	if e.poolPrefix.Addr().Is4() {
 		return 32
 	}
 	return 128
 }
+

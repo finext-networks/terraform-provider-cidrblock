@@ -7,20 +7,18 @@ import (
 	"context"
 	"strings"
 
+	"github.com/finext/terraform-provider-cidrblock/internal/ipam"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/finext/terraform-provider-cidrblock/internal/ipam"
 )
 
-// Ensure implementation satisfies interfaces.
 var (
 	_ datasource.DataSource = (*poolDataSource)(nil)
 )
 
-// poolDataSourceModel maps data source schema data.
 type poolDataSourceModel struct {
 	ID              types.String `tfsdk:"id"`
 	CIDR            types.String `tfsdk:"cidr"`
@@ -32,7 +30,6 @@ type poolDataSourceModel struct {
 	Metrics         types.Object `tfsdk:"metrics"`
 }
 
-// NewPoolDataSource returns a cidrblock_pool data source.
 func NewPoolDataSource() datasource.DataSource {
 	return &poolDataSource{}
 }
@@ -73,20 +70,16 @@ func (d *poolDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"prefix_size": schema.Int64Attribute{
-							Description: "The target subnet prefix size.",
-							Computed:    true,
+							Computed: true,
 						},
 						"reserve_sibling": schema.BoolAttribute{
-							Description: "Whether the sibling block is reserved.",
-							Computed:    true,
+							Computed: true,
 						},
 						"allocated_cidr": schema.StringAttribute{
-							Description: "The allocated CIDR block.",
-							Computed:    true,
+							Computed: true,
 						},
 						"sibling_cidr": schema.StringAttribute{
-							Description: "The reserved sibling CIDR (if reserve_sibling is true).",
-							Computed:    true,
+							Computed: true,
 						},
 					},
 				},
@@ -97,12 +90,10 @@ func (d *poolDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"start_cidr": schema.StringAttribute{
-							Description: "The starting CIDR of this available slice.",
-							Computed:    true,
+							Computed: true,
 						},
 						"max_prefix_size": schema.Int64Attribute{
-							Description: "The maximum prefix size allocatable in this slice.",
-							Computed:    true,
+							Computed: true,
 						},
 					},
 				},
@@ -112,20 +103,16 @@ func (d *poolDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				Computed:    true,
 				Attributes: map[string]schema.Attribute{
 					"total_ips": schema.Int64Attribute{
-						Description: "Total number of IP addresses in the pool.",
-						Computed:    true,
+						Computed: true,
 					},
 					"allocated_ips": schema.Int64Attribute{
-						Description: "Number of IPs currently allocated.",
-						Computed:    true,
+						Computed: true,
 					},
 					"reserved_ips": schema.Int64Attribute{
-						Description: "Number of IPs reserved (sibling blocks).",
-						Computed:    true,
+						Computed: true,
 					},
 					"available_ips": schema.Int64Attribute{
-						Description: "Number of IPs available for allocation.",
-						Computed:    true,
+						Computed: true,
 					},
 				},
 			},
@@ -135,40 +122,22 @@ func (d *poolDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 
 func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var data poolDataSourceModel
-	diag := req.Config.Get(ctx, &data)
-	resp.Diagnostics.Append(diag...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	poolID := data.ID.ValueString()
-	if poolID == "" {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("id"),
-			"Missing Pool ID",
-			"The pool ID is required to query the data source.",
-		)
-		return
-	}
-
 	cidr := data.CIDR.ValueString()
-	if cidr == "" {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("cidr"),
-			"Missing CIDR",
-			"The pool CIDR is required to compute available slices and metrics.",
-		)
+
+	if poolID == "" || cidr == "" {
+		resp.Diagnostics.AddError("Missing Parameters", "Both ID and CIDR inputs must be provided.")
 		return
 	}
 
-	// Parse pool ID into components
-	parts := splitPoolID(poolID)
+	parts := strings.Split(poolID, ":")
 	if len(parts) != 3 {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("id"),
-			"Invalid Pool ID",
-			"Pool ID must be in format organization:project:network, got: "+poolID,
-		)
+		resp.Diagnostics.AddAttributeError(path.Root("id"), "Invalid Pool ID", "Must be organization:project:network")
 		return
 	}
 
@@ -176,104 +145,60 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	data.Project = types.StringValue(parts[1])
 	data.Network = types.StringValue(parts[2])
 
-	// Initialize IPAM engine to compute metrics
 	eng, err := ipam.NewEngine(cidr)
 	if err != nil {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("cidr"),
-			"Invalid CIDR",
-			"Failed to parse CIDR: "+err.Error(),
-		)
+		resp.Diagnostics.AddError("Engine Creation Failed", err.Error())
 		return
 	}
 
-	// Load allocations from config (if any are provided via an allocations attribute)
-	// In practice, the data source reads the resource state. For standalone queries,
-	// we can optionally accept an allocations map.
-
-	// Compute metrics
-	metrics := eng.Metrics()
-
-	// Build metrics object
-	metricsObj, diag := types.ObjectValue(
-		map[string]attr.Type{
-			"total_ips":     types.Int64Type{},
-			"allocated_ips": types.Int64Type{},
-			"reserved_ips":  types.Int64Type{},
-			"available_ips": types.Int64Type{},
-		},
-		map[string]attr.Value{
-			"total_ips":     types.Int64Value(int64(metrics.TotalIPs)),
-			"allocated_ips": types.Int64Value(int64(metrics.AllocatedIPs)),
-			"reserved_ips":  types.Int64Value(int64(metrics.ReservedIPs)),
-			"available_ips": types.Int64Value(int64(metrics.AvailableIPs)),
-		},
-	)
-	resp.Diagnostics.Append(diag...)
-	if resp.Diagnostics.HasError() {
-		return
+	m := eng.Metrics()
+	metricTypes := map[string]attr.Type{
+		"total_ips":     types.Int64Type,
+		"allocated_ips": types.Int64Type,
+		"reserved_ips":  types.Int64Type,
+		"available_ips": types.Int64Type,
 	}
+
+	metricsObj, diags := types.ObjectValue(metricTypes, map[string]attr.Value{
+		"total_ips":     types.Int64Value(int64(m.TotalIPs)),
+		"allocated_ips": types.Int64Value(int64(m.AllocatedIPs)),
+		"reserved_ips":  types.Int64Value(int64(m.ReservedIPs)),
+		"available_ips": types.Int64Value(int64(m.AvailableIPs)),
+	})
+	resp.Diagnostics.Append(diags...)
 	data.Metrics = metricsObj
 
-	// Compute available slices
-	availableSlices := eng.AvailableSlices()
-	sliceObjects := make([]types.Object, 0, len(availableSlices))
-	for _, s := range availableSlices {
-		obj, diag := types.ObjectValue(
-			map[string]attr.Type{
-				"start_cidr":      types.StringType{},
-				"max_prefix_size": types.Int64Type{},
-			},
-			map[string]attr.Value{
-				"start_cidr":      types.StringValue(s.StartCIDR),
-				"max_prefix_size": types.Int64Value(int64(s.MaxPrefixSize)),
-			},
-		)
-		resp.Diagnostics.Append(diag...)
-		if resp.Diagnostics.HasError() {
-			return
-		}
-		sliceObjects = append(sliceObjects, obj)
+	slices := eng.AvailableSlices()
+	sliceAttrTypes := map[string]attr.Type{
+		"start_cidr":      types.StringType,
+		"max_prefix_size": types.Int64Type,
 	}
 
-	slicesList, diag := types.ListValue(
-		types.ObjectType{
-			AttrTypes: map[string]attr.Type{
-				"start_cidr":      types.StringType{},
-				"max_prefix_size": types.Int64Type{},
-			},
-		},
-		sliceObjects,
-	)
-	resp.Diagnostics.Append(diag...)
-	if resp.Diagnostics.HasError() {
-		return
+	sliceValues := make([]attr.Value, 0, len(slices))
+	for _, s := range slices {
+		objVal, diags := types.ObjectValue(sliceAttrTypes, map[string]attr.Value{
+			"start_cidr":      types.StringValue(s.StartCIDR),
+			"max_prefix_size": types.Int64Value(int64(s.MaxPrefixSize)),
+		})
+		resp.Diagnostics.Append(diags...)
+		sliceValues = append(sliceValues, objVal)
 	}
-	data.AvailableSlices = slicesList
 
-	// Set empty allocations map (data source doesn't manage allocations)
-	emptyAllocs, diag := types.MapValueEmpty(
-		types.ObjectType{
-			AttrTypes: map[string]attr.Type{
-				"prefix_size":     types.Int64Type{},
-				"reserve_sibling": types.BoolType{},
-				"allocated_cidr":  types.StringType{},
-				"sibling_cidr":    types.StringType{},
-			},
-		},
-	)
-	resp.Diagnostics.Append(diag...)
-	if resp.Diagnostics.HasError() {
-		return
+	listVal, diags := types.ListValue(types.ObjectType{AttrTypes: sliceAttrTypes}, sliceValues)
+	resp.Diagnostics.Append(diags...)
+	data.AvailableSlices = listVal
+
+	allocTypes := map[string]attr.Type{
+		"prefix_size":     types.Int64Type,
+		"reserve_sibling": types.BoolType,
+		"allocated_cidr":  types.StringType,
+		"sibling_cidr":    types.StringType,
 	}
-	data.Allocations = emptyAllocs
+	
+	mapVal, diags := types.MapValue(types.ObjectType{AttrTypes: allocTypes}, map[string]attr.Value{})
+	resp.Diagnostics.Append(diags...)
+	data.Allocations = mapVal
 
-	diag = resp.State.Set(ctx, data)
-	resp.Diagnostics.Append(diag...)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-// splitPoolID splits a pool ID into its components.
-func splitPoolID(id string) []string {
-	parts := strings.Split(id, ":")
-	return parts
-}

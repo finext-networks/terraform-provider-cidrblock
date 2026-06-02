@@ -2,7 +2,7 @@ VERSION       ?= 0.1.0
 GOOS          ?= $(shell go env GOOS)
 GOARCH        ?= $(shell go env GOARCH)
 BINARY_NAME   ?= terraform-provider-cidrblock
-GOFLAGS       ?= $(GOFLAGS)
+#GOFLAGS       ?= $(GOFLAGS)
 
 # Default target
 default: build

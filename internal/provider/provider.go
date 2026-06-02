@@ -10,7 +10,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 // cidrblockProvider implements provider.Provider.
@@ -19,11 +18,6 @@ type cidrblockProvider struct {
 	// provider is built and ran locally, and "test" when running acceptance
 	// testing.
 	version string
-}
-
-// cidrblockProviderModel is the provider data model.
-type cidrblockProviderModel struct {
-	// No provider-level configuration needed.
 }
 
 var (
@@ -39,9 +33,10 @@ func New(version string) func() provider.Provider {
 	}
 }
 
-// Metadata returns the provider type name.
+// Metadata returns the provider type name and version.
 func (p *cidrblockProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = "cidrblock"
+	resp.Version = p.version
 }
 
 // Schema defines the provider-level schema for configuration values.
@@ -53,15 +48,8 @@ func (p *cidrblockProvider) Schema(_ context.Context, _ provider.SchemaRequest, 
 
 // Configure prepares the provider for use.
 func (p *cidrblockProvider) Configure(_ context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
-	data := &cidrblockProviderModel{}
-
-	resp.Diagnostics.Append(req.Config.GetContext(req.Context, data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	resp.DataSourceData = p
-	resp.ResourceData = p
+	// This is a purely logical provider with no provider-level configuration arguments.
+	// We leave this empty since we do not need to initialize an external API client.
 }
 
 // DataSources defines the data sources implemented in the provider.
@@ -78,10 +66,3 @@ func (p *cidrblockProvider) Resources(_ context.Context) []func() resource.Resou
 	}
 }
 
-// ReadData is a no-op since there are no provider-level data attributes.
-func (p *cidrblockProvider) ReadData(_ context.Context, _ provider.ReadDataRequest, _ *provider.ReadDataResponse) {}
-
-// TerraformVersion returns the provider version.
-func (p *cidrblockProvider) TerraformVersion() types.String {
-	return types.StringValue(p.version)
-}
