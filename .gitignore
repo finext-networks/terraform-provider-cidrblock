@@ -1,0 +1,33 @@
+# Binaries
+terraform-provider-cidrblock
+terraform-provider-cidrblock.exe
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Terraform state
+*.tfstate*
+.terraform*
+crash.log
+
+# Generated docs
+docs/
+
+# Testing
+*.test
+*.out
+coverage.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Plan tracking
+planning.md

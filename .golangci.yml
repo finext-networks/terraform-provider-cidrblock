@@ -1,0 +1,24 @@
+linters:
+  enable:
+    - errcheck
+    - govet
+    - gofmt
+    - goimports
+    - staticcheck
+    - unused
+    - gci
+
+linters-settings:
+  gci:
+    sections:
+      - standard
+      - default
+      - prefix(github.com/finext/terraform-provider-cidrblock)
+    skip-generated: true
+
+run:
+  timeout: 5m
+
+issues:
+  exclude-use-default: false
+  max-same-issues: 0
