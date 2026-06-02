@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp and Contributors. All rights reserved.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package ipam provides IP Address Management (IPAM) logic for CIDR block allocation.
 // It implements first-fit gap filling, sibling reservation, and dual-stack (IPv4/IPv6)
 // support using Go's net/netip standard library.
@@ -7,9 +10,28 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"sort"
 )
 
-// Engine errors.
+// Strategy represents the layout positioning choice criteria used when 
+// selecting an unallocated space block from multiple available candidate gaps.
+type Strategy string
+
+const (
+	// StrategyFirst allocates the very first aligned address block that can fit 
+	// the requested prefix size, scanning from the lowest to highest address ranges.
+	StrategyFirst  Strategy = "FIRST"
+
+	// StrategyBest selects the smallest available continuous unallocated slice 
+	// that can still accommodate the request, minimizing fragment size degradation.
+	StrategyBest   Strategy = "BEST"
+
+	// StrategySparse selects the largest available continuous unallocated slice,
+	// maximizing isolation distance between independent subnet groups.
+	StrategySparse Strategy = "SPARSE"
+)
+
+// Engine errors defining explicit boundary validation failures.
 var (
 	ErrPoolExhausted     = errors.New("pool exhausted: no available space for allocation")
 	ErrInvalidPrefix     = errors.New("invalid prefix size for address family")
@@ -18,7 +40,7 @@ var (
 	ErrInvalidPool       = errors.New("invalid pool CIDR")
 )
 
-// Allocation represents a single subnet allocation within a pool.
+// Allocation models a single locked subnet space block tracked by the engine.
 type Allocation struct {
 	PrefixSize     int    `json:"prefix_size"`
 	ReserveSibling bool   `json:"reserve_sibling"`
@@ -26,13 +48,13 @@ type Allocation struct {
 	SiblingCIDR    string `json:"sibling_cidr,omitempty"`
 }
 
-// AvailableSlice represents an unallocated contiguous block in the pool.
+// AvailableSlice details an empty, contiguous span of addresses inside the pool.
 type AvailableSlice struct {
 	StartCIDR     string `json:"start_cidr"`
 	MaxPrefixSize int    `json:"max_prefix_size"`
 }
 
-// Metrics represents the current usage statistics of a pool.
+// Metrics tracks mathematical utilization snapshots of the managed address pool.
 type Metrics struct {
 	TotalIPs     uint64 `json:"total_ips"`
 	AllocatedIPs uint64 `json:"allocated_ips"`
@@ -40,13 +62,13 @@ type Metrics struct {
 	AvailableIPs uint64 `json:"available_ips"`
 }
 
-// Engine manages CIDR block allocations within a supernet pool.
+// Engine encapsulates stateful logical calculations over a single base CIDR supernet.
 type Engine struct {
 	poolPrefix  netip.Prefix
 	allocations map[string]*Allocation
 }
 
-// NewEngine creates a new IPAM engine for the given supernet CIDR.
+// NewEngine instantiates a validation-guarded IPAM calculator.
 func NewEngine(poolCIDR string) (*Engine, error) {
 	if poolCIDR == "" {
 		return nil, ErrInvalidPool
@@ -57,6 +79,7 @@ func NewEngine(poolCIDR string) (*Engine, error) {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidPool, err)
 	}
 
+	// Host bit validation prevents parsing broad ambiguous ranges (e.g., 10.0.0.5/24)
 	if prefix != prefix.Masked() {
 		return nil, fmt.Errorf("%w: %s has host bits set (expected %s)", ErrInvalidPool, poolCIDR, prefix.Masked().String())
 	}
@@ -67,17 +90,17 @@ func NewEngine(poolCIDR string) (*Engine, error) {
 	}, nil
 }
 
-// PoolCIDR returns the pool's base CIDR string.
+// PoolCIDR returns the clean structural base supernet string.
 func (e *Engine) PoolCIDR() string {
 	return e.poolPrefix.String()
 }
 
-// RegisterExistingAllocation force-injects an already allocated CIDR block from the state file.
+// RegisterExistingAllocation hydrates state directly from the provider's TF memory.
 func (e *Engine) RegisterExistingAllocation(key string, alloc *Allocation) {
 	e.allocations[key] = alloc
 }
 
-// GetAllocation returns a specific allocation by key.
+// GetAllocation reads tracking components securely for an existing key.
 func (e *Engine) GetAllocation(key string) (Allocation, error) {
 	alloc, exists := e.allocations[key]
 	if !exists {
@@ -86,7 +109,7 @@ func (e *Engine) GetAllocation(key string) (Allocation, error) {
 	return *alloc, nil
 }
 
-// GetState returns a copy of the current allocation state.
+// GetState dumps a isolated, deep-copied copy of the inner runtime map.
 func (e *Engine) GetState() map[string]Allocation {
 	state := make(map[string]Allocation)
 	for k, v := range e.allocations {
@@ -95,8 +118,8 @@ func (e *Engine) GetState() map[string]Allocation {
 	return state
 }
 
-// Allocate finds the first available gap and creates a new allocation.
-func (e *Engine) Allocate(key string, prefixSize int, reserveSibling bool) (string, error) {
+// Allocate executes searching and claims a block matching targeted layout constraints.
+func (e *Engine) Allocate(key string, prefixSize int, reserveSibling bool, strategy Strategy) (string, error) {
 	if _, exists := e.allocations[key]; exists {
 		return "", ErrDuplicateKey
 	}
@@ -106,7 +129,12 @@ func (e *Engine) Allocate(key string, prefixSize int, reserveSibling bool) (stri
 		return "", ErrInvalidPrefix
 	}
 
-	cidr, err := e.findGap(prefixSize, reserveSibling)
+	// Fuzz Guard: Prevents bit length underflows (-1) inside root supernet evaluations
+	if reserveSibling && prefixSize <= 0 {
+		return "", ErrInvalidPrefix
+	}
+
+	cidr, err := e.findGap(prefixSize, reserveSibling, strategy)
 	if err != nil {
 		return "", err
 	}
@@ -128,8 +156,8 @@ func (e *Engine) Allocate(key string, prefixSize int, reserveSibling bool) (stri
 	return cidr.String(), nil
 }
 
-// UpdateAllocation updates an existing allocation's properties.
-func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling bool) error {
+// UpdateAllocation manages modification processing while maintaining stability invariants.
+func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling bool, strategy Strategy) error {
 	alloc, exists := e.allocations[key]
 	if !exists {
 		return ErrAllocationNotFound
@@ -140,10 +168,15 @@ func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling boo
 		return ErrInvalidPrefix
 	}
 
+	if reserveSibling && prefixSize <= 0 {
+		return ErrInvalidPrefix
+	}
+
+	// Size changes force the allocation to completely clear and recalculate its placement
 	if prefixSize != alloc.PrefixSize {
 		delete(e.allocations, key)
 
-		cidr, err := e.findGap(prefixSize, reserveSibling)
+		cidr, err := e.findGap(prefixSize, reserveSibling, strategy)
 		if err != nil {
 			return err
 		}
@@ -165,6 +198,7 @@ func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling boo
 		return nil
 	}
 
+	// Non-size changes (toggling sibling reservations) are processed safely in place
 	alloc.ReserveSibling = reserveSibling
 	if reserveSibling {
 		prefix := netip.MustParsePrefix(alloc.AllocatedCIDR)
@@ -180,7 +214,7 @@ func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling boo
 	return nil
 }
 
-// Free removes an allocation by key.
+// Free cleans tracking records, releasing the target namespace key.
 func (e *Engine) Free(key string) error {
 	if _, exists := e.allocations[key]; !exists {
 		return ErrAllocationNotFound
@@ -189,17 +223,23 @@ func (e *Engine) Free(key string) error {
 	return nil
 }
 
-// AvailableSlices returns all contiguous unallocated gaps in the pool.
+// AvailableSlices runs an optimized $O(M)$ step iteration through active maps 
+// to extract discrete spans of remaining contiguous address gaps.
 func (e *Engine) AvailableSlices() []AvailableSlice {
 	maxBits := e.maxPrefix()
 	currentAddr := e.poolPrefix.Masked().Addr()
 	poolEndAddr := addBitOffset(currentAddr, maxBits-e.poolPrefix.Bits())
 	var slices []AvailableSlice
 
-	for currentAddr.Less(poolEndAddr) {
+	if !poolEndAddr.IsValid() {
+		return []AvailableSlice{{StartCIDR: e.poolPrefix.String(), MaxPrefixSize: e.poolPrefix.Bits()}}
+	}
+
+	for currentAddr.IsValid() && currentAddr.Less(poolEndAddr) {
 		var occupied netip.Prefix
 		found := false
 
+		// Identify whether the pointer sits inside a primary block or sibling reservation
 		for _, alloc := range e.allocations {
 			if alloc.AllocatedCIDR != "" {
 				p, _ := netip.ParsePrefix(alloc.AllocatedCIDR)
@@ -219,11 +259,13 @@ func (e *Engine) AvailableSlices() []AvailableSlice {
 			}
 		}
 
+		// If occupied, leap clean past the boundary block without executing step cycles
 		if found {
 			currentAddr = addBitOffset(occupied.Masked().Addr(), maxBits-occupied.Bits())
 			continue
 		}
 
+		// Discover the largest naturally aligned block size that fits the open gap
 		bestBits := maxBits
 		for bits := e.poolPrefix.Bits(); bits <= maxBits; bits++ {
 			p := netip.PrefixFrom(currentAddr, bits)
@@ -265,13 +307,13 @@ func (e *Engine) AvailableSlices() []AvailableSlice {
 	return slices
 }
 
-// Metrics returns pool usage statistics.
+// Metrics generates math sums calculating complete capacity snapshots.
 func (e *Engine) Metrics() Metrics {
 	maxBits := e.maxPrefix()
 
 	var totalIPs uint64
 	if shift := maxBits - e.poolPrefix.Bits(); shift >= 64 {
-		totalIPs = ^uint64(0)
+		totalIPs = ^uint64(0) // Safe bit saturation max handling for wide v6 spaces (/48, etc.)
 	} else {
 		totalIPs = 1 << shift
 	}
@@ -305,101 +347,148 @@ func (e *Engine) Metrics() Metrics {
 	}
 }
 
-// findGap finds the first contiguous gap large enough for the requested prefix size.
-func (e *Engine) findGap(prefixSize int, reserveSibling bool) (netip.Prefix, error) {
+// findGap navigates slice arrays dynamically to isolate targets.
+// Complexity is tightly bounded at $O(M)$ where $M$ is active keys, avoiding brute force hangs.
+func (e *Engine) findGap(prefixSize int, reserveSibling bool, strategy Strategy) (netip.Prefix, error) {
 	maxBits := e.maxPrefix()
-	currentAddr := e.poolPrefix.Masked().Addr()
-	poolEndAddr := addBitOffset(currentAddr, maxBits-e.poolPrefix.Bits())
+	slices := e.AvailableSlices()
 
-	for {
-		candidatePrefix := netip.PrefixFrom(currentAddr, prefixSize).Masked()
-		if candidatePrefix.Addr().Less(currentAddr) {
-			currentAddr = addBitOffset(candidatePrefix.Addr(), maxBits-prefixSize)
-			continue
-		} else {
-			currentAddr = candidatePrefix.Addr()
+	type candidate struct {
+		prefix    netip.Prefix
+		sliceBits int
+	}
+	var candidates []candidate
+
+	for _, s := range slices {
+		slicePrefix, _ := netip.ParsePrefix(s.StartCIDR)
+		currentAddr := slicePrefix.Masked().Addr()
+
+		var sliceEndAddr netip.Addr
+		if s.MaxPrefixSize > e.poolPrefix.Bits() {
+			sliceEndAddr = addBitOffset(slicePrefix.Masked().Addr(), maxBits-s.MaxPrefixSize)
 		}
 
-		if !currentAddr.Less(poolEndAddr) {
-			return netip.Prefix{}, ErrPoolExhausted
-		}
+		for currentAddr.IsValid() {
+			if !e.poolPrefix.Contains(currentAddr) {
+				break
+			}
+			if sliceEndAddr.IsValid() && !currentAddr.Less(sliceEndAddr) {
+				break
+			}
 
-		candidate := netip.PrefixFrom(currentAddr, prefixSize)
-		if !e.poolPrefix.Contains(candidate.Addr()) {
-			return netip.Prefix{}, ErrPoolExhausted
-		}
-
-		// Real-World Constraint: If a forward-expanding sibling reservation is requested,
-		// the candidate block must align with its future parent boundary (prefixSize - 1).
-		// This guarantees the base network address stays stable during expansion, preserving the gateway IP.
-		if reserveSibling {
-			parentPrefix := netip.PrefixFrom(currentAddr, prefixSize-1).Masked()
-			if candidate.Masked().Addr() != parentPrefix.Addr() {
-				currentAddr = addBitOffset(candidate.Masked().Addr(), maxBits-prefixSize)
+			candidatePrefix := netip.PrefixFrom(currentAddr, prefixSize).Masked()
+			if candidatePrefix.Addr().Less(currentAddr) {
+				currentAddr = addBitOffset(candidatePrefix.Addr(), maxBits-prefixSize)
 				continue
 			}
 
-			// Ensure the forward sibling block fits inside the supernet pool boundary
-			sibling := calcSibling(candidate)
-			if !e.poolPrefix.Contains(sibling.Addr()) {
-				currentAddr = addBitOffset(candidate.Masked().Addr(), maxBits-prefixSize)
-				continue
+			candidateBlock := netip.PrefixFrom(currentAddr, prefixSize)
+			if !e.poolPrefix.Contains(candidateBlock.Addr()) {
+				break
 			}
-		}
 
-		overlapFound := false
-		var overlappingPrefix netip.Prefix
-		for _, alloc := range e.allocations {
-			if alloc.AllocatedCIDR != "" {
-				p, _ := netip.ParsePrefix(alloc.AllocatedCIDR)
-				if p.Overlaps(candidate) {
-					overlapFound = true
-					overlappingPrefix = p
-					break
+			// Verify structural alignment limits for paired subnets
+			if reserveSibling {
+				parentPrefix := netip.PrefixFrom(currentAddr, prefixSize-1).Masked()
+				if candidateBlock.Masked().Addr() != parentPrefix.Addr() {
+					currentAddr = addBitOffset(candidateBlock.Masked().Addr(), maxBits-prefixSize)
+					continue
+				}
+
+				sibling := calcSibling(candidateBlock)
+				if !sibling.IsValid() || !e.poolPrefix.Contains(sibling.Addr()) {
+					currentAddr = addBitOffset(candidateBlock.Masked().Addr(), maxBits-prefixSize)
+					continue
 				}
 			}
-			if alloc.SiblingCIDR != "" {
-				p, _ := netip.ParsePrefix(alloc.SiblingCIDR)
-				if p.Overlaps(candidate) {
-					overlapFound = true
-					overlappingPrefix = p
-					break
-				}
-			}
-		}
 
-		if reserveSibling && !overlapFound {
-			sibling := calcSibling(candidate)
+			// Boundary Check: Explicit collision verification prevents cross-slice boundary overflow leakage
+			overlapFound := false
 			for _, alloc := range e.allocations {
 				if alloc.AllocatedCIDR != "" {
 					p, _ := netip.ParsePrefix(alloc.AllocatedCIDR)
-					if p.Overlaps(sibling) {
+					if p.Overlaps(candidateBlock) {
 						overlapFound = true
-						overlappingPrefix = p
 						break
 					}
 				}
 				if alloc.SiblingCIDR != "" {
 					p, _ := netip.ParsePrefix(alloc.SiblingCIDR)
-					if p.Overlaps(sibling) {
+					if p.Overlaps(candidateBlock) {
 						overlapFound = true
-						overlappingPrefix = p
 						break
 					}
 				}
 			}
-		}
 
-		if overlapFound {
-			currentAddr = addBitOffset(overlappingPrefix.Masked().Addr(), maxBits-overlappingPrefix.Bits())
-			continue
-		}
+			if reserveSibling && !overlapFound {
+				sibling := calcSibling(candidateBlock)
+				for _, alloc := range e.allocations {
+					if alloc.AllocatedCIDR != "" {
+						p, _ := netip.ParsePrefix(alloc.AllocatedCIDR)
+						if p.Overlaps(sibling) {
+							overlapFound = true
+							break
+						}
+					}
+					if alloc.SiblingCIDR != "" {
+						p, _ := netip.ParsePrefix(alloc.SiblingCIDR)
+						if p.Overlaps(sibling) {
+							overlapFound = true
+							break
+						}
+					}
+				}
+			}
 
-		return candidate, nil
+			if overlapFound {
+				currentAddr = addBitOffset(candidateBlock.Masked().Addr(), maxBits-prefixSize)
+				continue
+			}
+
+			candidates = append(candidates, candidate{
+				prefix:    candidateBlock,
+				sliceBits: s.MaxPrefixSize,
+			})
+
+			// FIRST strategy exits instantly on match to maximize deployment speed
+			if strategy == StrategyFirst || strategy == "" {
+				return candidateBlock, nil
+			}
+			break // Strategy sorting loops evaluate only the first aligned candidate per slice gap
+		}
 	}
+
+	if len(candidates) == 0 {
+		return netip.Prefix{}, ErrPoolExhausted
+	}
+
+	// Order matches to fulfill structural positioning definitions
+	switch strategy {
+	case StrategyBest:
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].sliceBits == candidates[j].sliceBits {
+				return candidates[i].prefix.Addr().Less(candidates[j].prefix.Addr())
+			}
+			return candidates[i].sliceBits > candidates[j].sliceBits
+		})
+	case StrategySparse:
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].sliceBits == candidates[j].sliceBits {
+				return candidates[i].prefix.Addr().Less(candidates[j].prefix.Addr())
+			}
+			return candidates[i].sliceBits < candidates[j].sliceBits
+		})
+	default:
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return candidates[i].prefix.Addr().Less(candidates[j].prefix.Addr())
+		})
+	}
+
+	return candidates[0].prefix, nil
 }
 
-// calcSibling calculates the adjacent forward binary sibling block.
+// calcSibling evaluates the high-half counterpart of a lower-half binary pair.
 func calcSibling(prefix netip.Prefix) netip.Prefix {
 	if prefix.Bits() <= 0 {
 		return netip.Prefix{}
@@ -408,17 +497,30 @@ func calcSibling(prefix netip.Prefix) netip.Prefix {
 	if prefix.Addr().Is6() {
 		maxBits = 128
 	}
-
-	// Move forward by exactly one block size to reserve the adjacent space
 	upperAddr := addBitOffset(prefix.Masked().Addr(), maxBits-prefix.Bits())
+	if !upperAddr.IsValid() {
+		return netip.Prefix{}
+	}
 	return netip.PrefixFrom(upperAddr, prefix.Bits())
 }
 
+// addBitOffset maps raw additions over byte arrays.
+// Fixed Fuzz Bug: Shift widths exceeding or matching boundaries are caught to avoid masking loops.
 func addBitOffset(addr netip.Addr, bitIndex int) netip.Addr {
+	if !addr.IsValid() {
+		return netip.Addr{}
+	}
 	if addr.Is4() {
+		if bitIndex >= 32 {
+			return netip.Addr{}
+		}
 		b := addr.As4()
 		carry := uint32(1) << bitIndex
 		val := uint32(b[3]) | uint32(b[2])<<8 | uint32(b[1])<<16 | uint32(b[0])<<24
+		
+		if val > 0xFFFFFFFF-carry {
+			return netip.Addr{} // Catch structural bit rollover overflows
+		}
 		val += carry
 		b[0] = byte(val >> 24)
 		b[1] = byte(val >> 16)
@@ -426,14 +528,23 @@ func addBitOffset(addr netip.Addr, bitIndex int) netip.Addr {
 		b[3] = byte(val)
 		return netip.AddrFrom4(b)
 	}
+	
+	if bitIndex >= 128 {
+		return netip.Addr{}
+	}
 	b := addr.As16()
 	byteIdx := 15 - (bitIndex / 8)
 	bitShift := uint(bitIndex % 8)
 	var carry uint16 = 1 << bitShift
+
+	// Sequentially ripple addition carrying operations down across the array block
 	for i := byteIdx; i >= 0 && carry > 0; i-- {
 		sum := uint16(b[i]) + carry
 		b[i] = byte(sum)
 		carry = sum >> 8
+	}
+	if carry > 0 {
+		return netip.Addr{}
 	}
 	return netip.AddrFrom16(b)
 }

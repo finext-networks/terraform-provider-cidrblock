@@ -19,15 +19,17 @@ var (
 	_ datasource.DataSource = (*poolDataSource)(nil)
 )
 
+// poolDataSourceModel details tracking values exposed by the read-only data source block.
 type poolDataSourceModel struct {
-	ID              types.String `tfsdk:"id"`
-	CIDR            types.String `tfsdk:"cidr"`
-	Organization    types.String `tfsdk:"organization"`
-	Project         types.String `tfsdk:"project"`
-	Network         types.String `tfsdk:"network"`
-	Allocations     types.Map    `tfsdk:"allocations"`
-	AvailableSlices types.List   `tfsdk:"available_slices"`
-	Metrics         types.Object `tfsdk:"metrics"`
+	ID                 types.String `tfsdk:"id"`
+	CIDR               types.String `tfsdk:"cidr"`
+	Organization       types.String `tfsdk:"organization"`
+	Project            types.String `tfsdk:"project"`
+	Network            types.String `tfsdk:"network"`
+	AllocationStrategy types.String `tfsdk:"allocation_strategy"`
+	Allocations        types.Map    `tfsdk:"allocations"`
+	AvailableSlices    types.List   `tfsdk:"available_slices"`
+	Metrics            types.Object `tfsdk:"metrics"`
 }
 
 func NewPoolDataSource() datasource.DataSource {
@@ -53,20 +55,19 @@ func (d *poolDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				Required:    true,
 			},
 			"organization": schema.StringAttribute{
-				Description: "Top-level namespace.",
-				Computed:    true,
+				Computed: true,
 			},
 			"project": schema.StringAttribute{
-				Description: "Mid-level namespace.",
-				Computed:    true,
+				Computed: true,
 			},
 			"network": schema.StringAttribute{
-				Description: "Base-level namespace.",
-				Computed:    true,
+				Computed: true,
+			},
+			"allocation_strategy": schema.StringAttribute{
+				Computed: true,
 			},
 			"allocations": schema.MapNestedAttribute{
-				Description: "Current allocations in the pool.",
-				Computed:    true,
+				Computed: true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"prefix_size": schema.Int64Attribute{
@@ -85,8 +86,7 @@ func (d *poolDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				},
 			},
 			"available_slices": schema.ListNestedAttribute{
-				Description: "List of available (unallocated) slices in the pool.",
-				Computed:    true,
+				Computed: true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"start_cidr": schema.StringAttribute{
@@ -99,8 +99,7 @@ func (d *poolDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				},
 			},
 			"metrics": schema.SingleNestedAttribute{
-				Description: "Pool usage metrics.",
-				Computed:    true,
+				Computed: true,
 				Attributes: map[string]schema.Attribute{
 					"total_ips": schema.Int64Attribute{
 						Computed: true,
@@ -135,15 +134,17 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
+	// Deconstruct the synthetic token ID to rehydrate configuration attributes
 	parts := strings.Split(poolID, ":")
-	if len(parts) != 3 {
-		resp.Diagnostics.AddAttributeError(path.Root("id"), "Invalid Pool ID", "Must be organization:project:network")
+	if len(parts) < 3 {
+		resp.Diagnostics.AddAttributeError(path.Root("id"), "Invalid Pool ID", "Must contain organization:project:network")
 		return
 	}
 
 	data.Organization = types.StringValue(parts[0])
 	data.Project = types.StringValue(parts[1])
 	data.Network = types.StringValue(parts[2])
+	data.AllocationStrategy = types.StringValue("FIRST")
 
 	eng, err := ipam.NewEngine(cidr)
 	if err != nil {
@@ -151,6 +152,7 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
+	// 1. Process and bind pool utilization math metrics objects
 	m := eng.Metrics()
 	metricTypes := map[string]attr.Type{
 		"total_ips":     types.Int64Type,
@@ -168,6 +170,7 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	resp.Diagnostics.Append(diags...)
 	data.Metrics = metricsObj
 
+	// 2. Fetch and serialize structural contiguous address spaces available lists
 	slices := eng.AvailableSlices()
 	sliceAttrTypes := map[string]attr.Type{
 		"start_cidr":      types.StringType,
@@ -188,6 +191,7 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	resp.Diagnostics.Append(diags...)
 	data.AvailableSlices = listVal
 
+	// 3. Instantiate an empty allocation map token baseline
 	allocTypes := map[string]attr.Type{
 		"prefix_size":     types.Int64Type,
 		"reserve_sibling": types.BoolType,

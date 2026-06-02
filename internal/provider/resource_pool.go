@@ -27,16 +27,18 @@ var (
 
 type poolResource struct{}
 
-// poolResourceModel utilizes explicit framework types to ensure stable protocol serialization.
+// poolResourceModel establishes configuration map layout fields for the framework schema.
 type poolResourceModel struct {
-	ID           types.String `tfsdk:"id"`
-	CIDR         types.String `tfsdk:"cidr"`
-	Organization types.String `tfsdk:"organization"`
-	Project      types.String `tfsdk:"project"`
-	Network      types.String `tfsdk:"network"`
-	Allocations  types.Map    `tfsdk:"allocations"`
+	ID                 types.String `tfsdk:"id"`
+	CIDR               types.String `tfsdk:"cidr"`
+	Organization       types.String `tfsdk:"organization"`
+	Project            types.String `tfsdk:"project"`
+	Network            types.String `tfsdk:"network"`
+	AllocationStrategy types.String `tfsdk:"allocation_strategy"`
+	Allocations        types.Map    `tfsdk:"allocations"`
 }
 
+// allocationModel builds structure schemas matching internal map metrics attributes.
 type allocationModel struct {
 	PrefixSize     types.Int64  `tfsdk:"prefix_size"`
 	ReserveSibling types.Bool   `tfsdk:"reserve_sibling"`
@@ -44,6 +46,7 @@ type allocationModel struct {
 	SiblingCIDR    types.String `tfsdk:"sibling_cidr"`
 }
 
+// namespaceRegex prevents colon collisions inside composite identifier strings
 var namespaceRegex = regexp.MustCompile(`^[a-zA-Z0-9-_]+$`)
 
 func NewPoolResource() resource.Resource {
@@ -78,6 +81,14 @@ func (r *poolResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 			"network": schema.StringAttribute{
 				Required: true,
+			},
+			"allocation_strategy": schema.StringAttribute{
+				Optional:    true,
+				Computed:    true,
+				Description: "Algorithmic layout search strategy choice (FIRST, BEST, SPARSE). Defaults to FIRST.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"allocations": schema.MapNestedAttribute{
 				Optional: true,
@@ -118,13 +129,20 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	// Fix: Incorporate the CIDR into the ID to make the logical resource fully import-safe
+	// ID builds structural synthetic keys required by Terraform lifecycle interfaces
 	plan.ID = types.StringValue(org + ":" + proj + ":" + netw + ":" + plan.CIDR.ValueString())
 
 	eng, err := ipam.NewEngine(plan.CIDR.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid Base Pool Prefix", err.Error())
 		return
+	}
+
+	strat := ipam.StrategyFirst
+	if !plan.AllocationStrategy.IsNull() && !plan.AllocationStrategy.IsUnknown() {
+		strat = ipam.Strategy(plan.AllocationStrategy.ValueString())
+	} else {
+		plan.AllocationStrategy = types.StringValue(string(strat))
 	}
 
 	var planAllocs map[string]allocationModel
@@ -147,6 +165,7 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 		},
 	}
 
+	// Process keys in alphabetical order to maintain state file determinism
 	keys := make([]string, 0, len(planAllocs))
 	for k := range planAllocs {
 		keys = append(keys, k)
@@ -155,15 +174,13 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	for _, k := range keys {
 		v := planAllocs[k]
-		cidr, err := eng.Allocate(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool())
+		cidr, err := eng.Allocate(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool(), strat)
 		if err != nil {
 			resp.Diagnostics.AddError("Allocation Failed", fmt.Sprintf("Key %s: %s", k, err.Error()))
 			return
 		}
 
 		stateRecord, _ := eng.GetAllocation(k)
-		
-		// Fix: Use an explicit empty string instead of Null to keep test assertions stable
 		siblingVal := types.StringValue("")
 		if stateRecord.SiblingCIDR != "" {
 			siblingVal = types.StringValue(stateRecord.SiblingCIDR)
@@ -179,9 +196,14 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 		resultElements[k] = objVal
 	}
 
-	mapVal, diags := types.MapValue(allocObjectType, resultElements)
-	resp.Diagnostics.Append(diags...)
-	plan.Allocations = mapVal
+	// Fix: Null map checks maintain exact model symmetry, eliminating inconsistent state panics
+	if plan.Allocations.IsNull() {
+		plan.Allocations = types.MapNull(allocObjectType)
+	} else {
+		mapVal, diags := types.MapValue(allocObjectType, resultElements)
+		resp.Diagnostics.Append(diags...)
+		plan.Allocations = mapVal
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -193,7 +215,7 @@ func (r *poolResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	// Fix: Parse the 4-part ID using a split limit N=4 to handle IPv6 colons safely during imports
+	// Rehydrate state attributes from composite IDs during logical imports
 	if state.Organization.IsNull() || state.Organization.IsUnknown() || state.CIDR.IsNull() || state.CIDR.IsUnknown() {
 		parts := strings.SplitN(state.ID.ValueString(), ":", 4)
 		if len(parts) == 4 {
@@ -219,6 +241,13 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 
 	eng, _ := ipam.NewEngine(plan.CIDR.ValueString())
 
+	strat := ipam.StrategyFirst
+	if !plan.AllocationStrategy.IsNull() && !plan.AllocationStrategy.IsUnknown() {
+		strat = ipam.Strategy(plan.AllocationStrategy.ValueString())
+	} else {
+		plan.AllocationStrategy = types.StringValue(string(strat))
+	}
+
 	var stateAllocs map[string]allocationModel
 	if !state.Allocations.IsNull() && !state.Allocations.IsUnknown() {
 		resp.Diagnostics.Append(state.Allocations.ElementsAs(ctx, &stateAllocs, false)...)
@@ -239,7 +268,7 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		planAllocs = make(map[string]allocationModel)
 	}
 
-	// 1. Stateful Hydration: Pre-seed unaltered allocations straight from state memory
+	// Re-register static allocations to prevent shifts across update evaluations
 	for k, v := range stateAllocs {
 		if v.AllocatedCIDR.IsNull() || v.AllocatedCIDR.IsUnknown() {
 			continue
@@ -256,7 +285,6 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		}
 	}
 
-	// 2. Process all allocations and updates deterministically using sorted keys
 	resultElements := make(map[string]attr.Value)
 	allocObjectType := types.ObjectType{
 		AttrTypes: map[string]attr.Type{
@@ -276,11 +304,10 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	for _, k := range keys {
 		v := planAllocs[k]
 
-		// Real-World Cloud Expansion Rule: If a user modifies a sibling reservation, 
-		// execute an inline mutation update while keeping the baseline gateway CIDR stable.
+		// Execute inline modification if the specific key token already exists
 		if existing, err := eng.GetAllocation(k); err == nil && int64(existing.PrefixSize) == v.PrefixSize.ValueInt64() {
 			if v.ReserveSibling.ValueBool() != existing.ReserveSibling {
-				err = eng.UpdateAllocation(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool())
+				err = eng.UpdateAllocation(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool(), strat)
 				if err != nil {
 					resp.Diagnostics.AddError("Sibling Reservation Modification Failed", err.Error())
 					return
@@ -288,7 +315,6 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 				existing, _ = eng.GetAllocation(k)
 			}
 
-			// Fix: Use an explicit empty string instead of Null to keep test assertions stable
 			siblingVal := types.StringValue("")
 			if existing.SiblingCIDR != "" {
 				siblingVal = types.StringValue(existing.SiblingCIDR)
@@ -305,16 +331,14 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 			continue
 		}
 
-		// Otherwise, allocate a clean forward-aligned gap for new or expanded block configurations
-		cidr, err := eng.Allocate(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool())
+		// Otherwise, process as a new subnet entry allocation step
+		cidr, err := eng.Allocate(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool(), strat)
 		if err != nil {
 			resp.Diagnostics.AddError("Pool Allocation Failed", fmt.Sprintf("Key %s: %s", k, err.Error()))
 			return
 		}
 
 		stateRecord, _ := eng.GetAllocation(k)
-		
-		// Fix: Use an explicit empty string instead of Null to keep test assertions stable
 		siblingVal := types.StringValue("")
 		if stateRecord.SiblingCIDR != "" {
 			siblingVal = types.StringValue(stateRecord.SiblingCIDR)
@@ -330,14 +354,20 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		resultElements[k] = objVal
 	}
 
-	mapVal, diags := types.MapValue(allocObjectType, resultElements)
-	resp.Diagnostics.Append(diags...)
-	plan.Allocations = mapVal
+	// Fix: Ensure null updates maintain correct structural configuration formatting
+	if plan.Allocations.IsNull() {
+		plan.Allocations = types.MapNull(allocObjectType)
+	} else {
+		mapVal, diags := types.MapValue(allocObjectType, resultElements)
+		resp.Diagnostics.Append(diags...)
+		plan.Allocations = mapVal
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 func (r *poolResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
+	// Pure logical component requires no remote state teardown orchestration API sweeps
 }
 
 func (r *poolResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
