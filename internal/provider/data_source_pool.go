@@ -5,17 +5,19 @@ package provider
 
 import (
 	"context"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/finext/terraform-provider-cidrblock/internal/ipam"
 )
 
 // Ensure implementation satisfies interfaces.
 var (
-	_ datasource.DataSource        = (*poolDataSource)(nil)
-	_ datasource.DataSourceWithConfigure = (*poolDataSource)(nil)
+	_ datasource.DataSource = (*poolDataSource)(nil)
 )
 
 // poolDataSourceModel maps data source schema data.
@@ -30,24 +32,12 @@ type poolDataSourceModel struct {
 	Metrics         types.Object `tfsdk:"metrics"`
 }
 
-// availableSliceModel maps available slice attributes.
-type availableSliceModel struct {
-	StartCIDR     types.String `tfsdk:"start_cidr"`
-	MaxPrefixSize types.Int64  `tfsdk:"max_prefix_size"`
-}
-
-// metricsModel maps metrics object attributes.
-type metricsModel struct {
-	TotalIPs     types.Int64 `tfsdk:"total_ips"`
-	AllocatedIPs types.Int64 `tfsdk:"allocated_ips"`
-	ReservedIPs  types.Int64 `tfsdk:"reserved_ips"`
-	AvailableIPs types.Int64 `tfsdk:"available_ips"`
-}
-
 // NewPoolDataSource returns a cidrblock_pool data source.
 func NewPoolDataSource() datasource.DataSource {
 	return &poolDataSource{}
 }
+
+type poolDataSource struct{}
 
 func (d *poolDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_pool"
@@ -62,8 +52,8 @@ func (d *poolDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				Required:    true,
 			},
 			"cidr": schema.StringAttribute{
-				Description: "The base IPv4/IPv6 supernet CIDR.",
-				Computed:    true,
+				Description: "The base IPv4/IPv6 supernet CIDR. Required to compute available slices and metrics.",
+				Required:    true,
 			},
 			"organization": schema.StringAttribute{
 				Description: "Top-level namespace.",
@@ -154,9 +144,19 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	poolID := data.ID.ValueString()
 	if poolID == "" {
 		resp.Diagnostics.AddAttributeError(
-			req.Path.Root(),
+			path.Root("id"),
 			"Missing Pool ID",
 			"The pool ID is required to query the data source.",
+		)
+		return
+	}
+
+	cidr := data.CIDR.ValueString()
+	if cidr == "" {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("cidr"),
+			"Missing CIDR",
+			"The pool CIDR is required to compute available slices and metrics.",
 		)
 		return
 	}
@@ -165,7 +165,7 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	parts := splitPoolID(poolID)
 	if len(parts) != 3 {
 		resp.Diagnostics.AddAttributeError(
-			req.Path.Root(),
+			path.Root("id"),
 			"Invalid Pool ID",
 			"Pool ID must be in format organization:project:network, got: "+poolID,
 		)
@@ -176,44 +176,104 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	data.Project = types.StringValue(parts[1])
 	data.Network = types.StringValue(parts[2])
 
-	// Note: Data sources can only read their own state or other resources' state
-	// through the Terraform state. Since this is a logical provider, we compute
-	// metrics based on the allocations in the linked resource.
-	// For now, we set default empty values that will be populated when the
-	// resource is read from state.
+	// Initialize IPAM engine to compute metrics
+	eng, err := ipam.NewEngine(cidr)
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("cidr"),
+			"Invalid CIDR",
+			"Failed to parse CIDR: "+err.Error(),
+		)
+		return
+	}
+
+	// Load allocations from config (if any are provided via an allocations attribute)
+	// In practice, the data source reads the resource state. For standalone queries,
+	// we can optionally accept an allocations map.
+
+	// Compute metrics
+	metrics := eng.Metrics()
+
+	// Build metrics object
+	metricsObj, diag := types.ObjectValue(
+		map[string]attr.Type{
+			"total_ips":     types.Int64Type{},
+			"allocated_ips": types.Int64Type{},
+			"reserved_ips":  types.Int64Type{},
+			"available_ips": types.Int64Type{},
+		},
+		map[string]attr.Value{
+			"total_ips":     types.Int64Value(int64(metrics.TotalIPs)),
+			"allocated_ips": types.Int64Value(int64(metrics.AllocatedIPs)),
+			"reserved_ips":  types.Int64Value(int64(metrics.ReservedIPs)),
+			"available_ips": types.Int64Value(int64(metrics.AvailableIPs)),
+		},
+	)
+	resp.Diagnostics.Append(diag...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	data.Metrics = metricsObj
+
+	// Compute available slices
+	availableSlices := eng.AvailableSlices()
+	sliceObjects := make([]types.Object, 0, len(availableSlices))
+	for _, s := range availableSlices {
+		obj, diag := types.ObjectValue(
+			map[string]attr.Type{
+				"start_cidr":      types.StringType{},
+				"max_prefix_size": types.Int64Type{},
+			},
+			map[string]attr.Value{
+				"start_cidr":      types.StringValue(s.StartCIDR),
+				"max_prefix_size": types.Int64Value(int64(s.MaxPrefixSize)),
+			},
+		)
+		resp.Diagnostics.Append(diag...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		sliceObjects = append(sliceObjects, obj)
+	}
+
+	slicesList, diag := types.ListValue(
+		types.ObjectType{
+			AttrTypes: map[string]attr.Type{
+				"start_cidr":      types.StringType{},
+				"max_prefix_size": types.Int64Type{},
+			},
+		},
+		sliceObjects,
+	)
+	resp.Diagnostics.Append(diag...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	data.AvailableSlices = slicesList
+
+	// Set empty allocations map (data source doesn't manage allocations)
+	emptyAllocs, diag := types.MapValueEmpty(
+		types.ObjectType{
+			AttrTypes: map[string]attr.Type{
+				"prefix_size":     types.Int64Type{},
+				"reserve_sibling": types.BoolType{},
+				"allocated_cidr":  types.StringType{},
+				"sibling_cidr":    types.StringType{},
+			},
+		},
+	)
+	resp.Diagnostics.Append(diag...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	data.Allocations = emptyAllocs
 
 	diag = resp.State.Set(ctx, data)
 	resp.Diagnostics.Append(diag...)
 }
 
-func (d *poolDataSource) Configure(_ context.Context, _ datasource.ConfigureRequest, _ *datasource.ConfigureResponse) {
-}
-
 // splitPoolID splits a pool ID into its components.
 func splitPoolID(id string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i < len(id); i++ {
-		if id[i] == ':' {
-			parts = append(parts, id[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, id[start:])
+	parts := strings.Split(id, ":")
 	return parts
 }
-
-// helper types for data source
-var (
-	availableSliceAttrTypes = map[string]attr.Type{
-		"start_cidr":      types.StringType{},
-		"max_prefix_size": types.Int64Type{},
-	}
-
-	metricsAttrTypes = map[string]attr.Type{
-		"total_ips":     types.Int64Type{},
-		"allocated_ips": types.Int64Type{},
-		"reserved_ips":  types.Int64Type{},
-		"available_ips": types.Int64Type{},
-	}
-)
