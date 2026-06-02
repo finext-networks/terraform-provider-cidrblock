@@ -1,6 +1,7 @@
 // Copyright (c) HashiCorp and Contributors. All rights reserved.
 // SPDX-License-Identifier: MPL-2.0
 
+// Package main provides the entry point for the Terraform Provider.
 package main
 
 import (
@@ -19,6 +20,9 @@ var (
 	// to appropriate values for the built binary.
 	version string = "dev"
 )
+
+// Generate documentation for the provider.
+//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name cidrblock
 
 func main() {
 	var debug bool

@@ -1,0 +1,68 @@
+# terraform-provider-cidrblock
+
+The **cidrblock** provider is a logical IP Address Management (IPAM) provider for Terraform.
+It tracks, allocates, and recycles subnets from a defined supernet pool without making any
+external API calls to cloud vendors.
+
+## Features
+
+- **First-fit gap filling** -- Freed allocations are mathematically recycled into available gaps
+- **Sibling reservation** -- Reserve adjacent binary sibling blocks for future expansion
+- **Dual-stack** -- Native IPv4 and IPv6 support via Go's `net/netip`
+- **Cloud-agnostic** -- Standard GCP hierarchical terminology (organization/project/network) for isolation
+- **Single-resource state** -- All allocations in one resource for atomic updates
+
+## Usage
+
+```hcl
+terraform {
+  required_providers {
+    cidrblock = {
+      source = "finext/cidrblock"
+    }
+  }
+}
+
+resource "cidrblock_pool" "example" {
+  cidr         = "10.0.0.0/16"
+  organization = "my-org"
+  project      = "my-project"
+  network      = "vpc-main"
+
+  allocations = {
+    subnet_a = {
+      prefix_size     = 24
+      reserve_sibling = false
+    }
+
+    subnet_b = {
+      prefix_size     = 24
+      reserve_sibling = true
+    }
+  }
+}
+
+output "subnet_a" {
+  value = cidrblock_pool.example.allocations["subnet_a"].allocated_cidr
+}
+```
+
+## Resources
+
+- `cidrblock_pool` -- Manages a CIDR block pool for IP Address Management
+
+## Data Sources
+
+- `cidrblock_pool` -- Reads a pool's state, showing allocations and metrics
+
+{{- range template .Resources }}
+  {{- if ne .Name "cidrblock_pool" }}
+- [`{{.Name}}`](../resources/{{.Name}}.md)
+  {{- end }}
+{{- end }}
+
+{{- range template .DataSources }}
+  {{- if ne .Name "cidrblock_pool" }}
+- [`{{.Name}}`](../data-sources/{{.Name}}.md)
+  {{- end }}
+{{- end }}

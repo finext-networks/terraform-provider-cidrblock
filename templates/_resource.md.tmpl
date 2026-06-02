@@ -1,0 +1,32 @@
+# {{ .Name }} - {{ .Description | cleancomment }}
+
+{{ .Description | markdown }}
+
+## Example Usage
+
+{{ range $i, $ex := .Examples -}}
+{{ if $i -}}
+---
+{{ end -}}
+
+```terraform
+{{ $ex }}
+```
+
+{{ end -}}
+
+## Argument Reference
+
+{{- range template .Arguments }}
+  {{- if or (and .Required (eq .Type "Input")) (and .Optional (eq .Type "Input")) (and .Computed (eq .Type "Input")) )}}
+* **{{ .Name }}** - {{ .Description | markdown }} ({{ .Type | capitalize }})
+  {{- end }}
+{{- end }}
+
+## Attribute Reference
+
+{{- range template .Attributes }}
+  {{- if and .Computed (eq .Type "Output") }}
+* **{{ .Name }}** - {{ .Description | markdown }}
+  {{- end }}
+{{- end }}
