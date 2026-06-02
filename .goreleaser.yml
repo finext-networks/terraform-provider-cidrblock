@@ -1,0 +1,58 @@
+# Main GoReleaser configuration for Terraform Provider
+# Reference: https://goreleaser.com/customization/build/
+
+version: 2
+
+dist: .
+
+env:
+  - CGO_ENABLED=0
+
+builds:
+  - id: terraform-provider-cidrblock
+    binary: terraform-provider-cidrblock
+    dir: .
+    goos:
+      - darwin
+      - freebsd
+      - illumos
+      - linux
+      - netbsd
+      - openbsd
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goarm:
+      - '6'
+      - '7'
+    ignore:
+      - goos: darwin
+        goarch: amd64
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - "-s -w -X main.version={{.Version}}"
+
+archives:
+  - format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
+
+signs:
+  - cmd: gpg
+    args:
+      - "--output"
+      - "${signature}"
+      - "--armor"
+      - "--detach-sign"
+      - "${artifact}"
+    artifacts: checksum
+
+changelog:
+  use: git
