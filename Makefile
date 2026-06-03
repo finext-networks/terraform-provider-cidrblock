@@ -44,8 +44,7 @@ test-e2e: build
 	@echo "==> Constructing temporary developer runtime overrides..."
 	@echo 'provider_installation { dev_overrides { "finext-networks/cidrblock" = "$(shell pwd)" } direct {} }' > .terraformrc
 	@echo "==> Running automated E2E integration test suites..."
-	@export TF_CLI_CONFIG_FILE=$(shell pwd)/.terraformrc; \
-	cd tests && terraform test
+	@cd tests && TF_CLI_CONFIG_FILE=$$PWD/../.terraformrc terraform test
 
 ## generate: Generate documentation
 .PHONY: generate
