@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 jobs:
-  # ensure the code follows formatting standards
+  # Ensure the code follows formatting standards
   fmt:
     name: fmt
     runs-on: ubuntu-latest
@@ -34,15 +34,14 @@ jobs:
       - run: |
           go mod tidy
           diff=$(git diff --ignore-space-change --rename-stat=40 --color=never go.mod)
-          gofmt_diff=$(go fmt ./...)
-          if [ -n "$diff" ] || [ -n "$gofmt_diff" ]; then
-            echo "go.mod and/or go formatters would apply changes:"
-            echo "$diff"
-            echo "$gofmt_diff"
+          go fmt ./...
+          git_diff=$(git diff --exit-code)
+          if [ -n "$diff" ] || [ -n "$git_diff" ]; then
+            echo "go.mod and/or go formatters would apply changes. Run go fmt and go mod tidy locally."
             exit 1
           fi
 
-  # run linter
+  # Run linter
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -57,7 +56,22 @@ jobs:
         with:
           version: v1.64.5
 
-  # run acceptance tests
+  # Validate documentation matches schema definitions without drift
+  generate:
+    name: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe4b10d3ae06a7f2e1e5d40faf5513 # v4.2.2
+      - uses: actions/setup-go@f111536c599f0033146361be355c2f2f2d9740f8 # v5.2.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - run: |
+          go generate ./...
+          git diff --exit-code docs/ || (echo "Generated documentation is out of date with schema changes. Run 'make generate' locally and commit the resulting docs/ directory additions." && exit 1)
+
+  # Run core unit and property-based fuzz tests
   test:
     name: test
     runs-on: ubuntu-latest
@@ -71,7 +85,7 @@ jobs:
       - run: |
           go test -v -cover -timeout=10m -parallel=4 ./...
 
-  # run acceptance tests with Terraform CLI
+  # Run acceptance tests with Terraform CLI
   testacc:
     name: testacc
     runs-on: ubuntu-latest
@@ -87,3 +101,21 @@ jobs:
           terraform_version: '1.5.7'
       - run: |
           TF_ACC=1 go test -v -cover -timeout=15m -parallel=4 ./...
+
+  # Run automated native HCL end-to-end integration test scenarios
+  test-e2e:
+    name: test-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe4b10d3ae06a7f2e1e5d40faf5513 # v4.2.2
+      - uses: actions/setup-go@f111536c599f0033146361be355c2f2f2d9740f8 # v5.2.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.5.7'
+      - name: Run E2E Automation Target
+        run: make test-e2e
+
