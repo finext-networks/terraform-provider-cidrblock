@@ -656,4 +656,170 @@ func TestAccDataSource_EmptyInputs(t *testing.T) {
 	})
 }
 
+// TestAccPoolResource_FirstFitDecreasingLifecycle validates that the provider re-orders incoming requests
+// by network size descending to optimize packing efficiency, and checks null map update safety paths.
+func TestAccPoolResource_FirstFitDecreasingLifecycle(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create a pool with anti-optimal alphabetical names.
+			// FFD sorting intercepts this and evaluates 'a_large_tier' first, preventing fragmentation dead-zones.
+			{
+				Config: testAccPoolResourceConfig("10.80.0.0/24", `
+					z_small_tier = {
+						prefix_size     = 28
+						reserve_sibling = false
+					}
+					a_large_tier = {
+						prefix_size     = 26
+						reserve_sibling = false
+					}
+				`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.a_large_tier.allocated_cidr", "10.80.0.0/26"),
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.z_small_tier.allocated_cidr", "10.80.0.64/28"),
+				),
+			},
+			// Step 2: Update the pool by adding a third tier.
+			// Base-Address Immutability guarantees 'z_small_tier' stays anchored at .64/28.
+			// The new /27 medium tier aligns cleanly onto the next available boundaries at .96/27.
+			{
+				Config: testAccPoolResourceConfig("10.80.0.0/24", `
+					z_small_tier = {
+						prefix_size     = 28
+						reserve_sibling = false
+					}
+					a_large_tier = {
+						prefix_size     = 26
+						reserve_sibling = false
+					}
+					m_medium_tier = {
+						prefix_size     = 27
+						reserve_sibling = false
+					}
+				`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.a_large_tier.allocated_cidr", "10.80.0.0/26"),
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.m_medium_tier.allocated_cidr", "10.80.0.96/27"), // Aligned past anchored small block
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.z_small_tier.allocated_cidr", "10.80.0.64/28"),  // Stays locked in place
+				),
+			},
+			// Step 3: Wipe all allocations entirely to clear the MapNull update diagnostic coverage blocks.
+			{
+				Config: testAccPoolResourceConfig("10.80.0.0/24", ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocation_strategy", "FIRST"),
+				),
+			},
+			// Step 4: Update the resource by completely omitting allocation_strategy and allocations parameters.
+			// Because allocation_strategy is Computed, omitting it triggers our provider fallback value ("FIRST").
+			{
+				Config: `
+					provider "cidrblock" {}
+					resource "cidrblock_pool" "test" {
+					  cidr         = "10.80.0.0/24"
+					  organization = "test-org"
+					  project      = "test-project"
+					  network      = "test-network"
+					}
+				`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "cidr", "10.80.0.0/24"),
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocation_strategy", "FIRST"), // Asserts default compute fallback
+				),
+			},
+		},
+	})
+}
+
+// TestAccPoolResource_SafetyGuardrailDestruction blocks resource degradation plans
+func TestAccPoolResource_SafetyGuardrailDestruction(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Initialize with safety flag enabled and a test subnet
+			{
+				Config: `
+					provider "cidrblock" {
+						prevent_subnet_destruction = true
+					}
+					resource "cidrblock_pool" "secure" {
+						cidr         = "10.90.0.0/24"
+						organization = "sec"
+						project      = "ops"
+						network      = "main"
+						allocations = {
+							important_service = {
+								prefix_size     = 26
+								reserve_sibling = false
+							}
+						}
+					}
+				`,
+				Check: resource.TestCheckResourceAttr("cidrblock_pool.secure", "allocations.important_service.allocated_cidr", "10.90.0.0/26"),
+			},
+			// Step 2: Attempt to wipe the subnet key out of the block. The provider must fail the run.
+			{
+				Config: `
+					provider "cidrblock" {
+						prevent_subnet_destruction = true
+					}
+					resource "cidrblock_pool" "secure" {
+						cidr         = "10.90.0.0/24"
+						organization = "sec"
+						project      = "ops"
+						network      = "main"
+						allocations  = {}
+					}
+				`,
+				ExpectError: regexp.MustCompile("Subnet Destruction Blocked"),
+			},
+		},
+	})
+}
+
+// TestAccPoolResource_UpdateValidationFailure forces a structural error during the update
+// phase to ensure the framework gracefully catches and exposes calculation boundary errors.
+func TestAccPoolResource_UpdateValidationFailure(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Initialize a stable layout where alphabetical sorting forces 
+			// the target update block onto an unaligned offset address (.16/28).
+			{
+				Config: testAccPoolResourceConfig("10.75.0.0/24", `
+					a_anchor_subnet = {
+						prefix_size     = 28
+						reserve_sibling = false
+					}
+					z_unaligned_subnet = {
+						prefix_size     = 28
+						reserve_sibling = false
+					}
+				`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.a_anchor_subnet.allocated_cidr", "10.75.0.0/28"),
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.z_unaligned_subnet.allocated_cidr", "10.75.0.16/28"),
+				),
+			},
+			// Step 2: Attempt an unaligned size alteration on z_unaligned_subnet (.16/28 to /27).
+			// This breaks binary tree boundaries and forces an UpdateAllocation alignment error pass.
+			{
+				Config: testAccPoolResourceConfig("10.75.0.0/24", `
+					a_anchor_subnet = {
+						prefix_size     = 28
+						reserve_sibling = false
+					}
+					z_unaligned_subnet = {
+						prefix_size     = 27
+						reserve_sibling = false
+					}
+				`),
+				// Fix: Shortened to a wrap-proof substring because the Terraform CLI text-wraps 
+				// long diagnostic details, breaking multi-word checks that happen to cross line breaks.
+				ExpectError: regexp.MustCompile("breaks binary alignment"),
+			},
+		},
+	})
+}
 

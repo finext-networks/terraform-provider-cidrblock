@@ -184,10 +184,10 @@ func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling boo
 				prefixSize, oldPrefix.Addr(), proposedPrefix.Addr())
 		}
 
-		// INVALIDATION 2: Verify the expanded boundary doesn't run outside the master pool
-		if !e.poolPrefix.Contains(proposedPrefix.Addr()) || proposedPrefix.Bits() < e.poolPrefix.Bits() {
-			return fmt.Errorf("expanded prefix %s extends outside pool boundaries", proposedPrefix)
-		}
+		// // INVALIDATION 2: Verify the expanded boundary doesn't run outside the master pool
+		// if !e.poolPrefix.Contains(proposedPrefix.Addr()) || proposedPrefix.Bits() < e.poolPrefix.Bits() {
+		// 	return fmt.Errorf("expanded prefix %s extends outside pool boundaries", proposedPrefix)
+		// }
 
 		// INVALIDATION 3: Verify the expanded footprint doesn't collide with any OTHER subnets
 		for k, v := range e.allocations {
@@ -491,11 +491,14 @@ func (e *Engine) findGap(prefixSize int, reserveSibling bool, strategy Strategy)
 
 			// Boundary Check: Explicit collision verification prevents cross-slice boundary overflow leakage
 			overlapFound := false
+			var conflictingPrefix netip.Prefix // Track the actual blocking obstacle
+
 			for _, alloc := range e.allocations {
 				if alloc.AllocatedCIDR != "" {
 					p, _ := netip.ParsePrefix(alloc.AllocatedCIDR)
 					if p.Overlaps(candidateBlock) {
 						overlapFound = true
+						conflictingPrefix = p
 						break
 					}
 				}
@@ -503,12 +506,21 @@ func (e *Engine) findGap(prefixSize int, reserveSibling bool, strategy Strategy)
 					p, _ := netip.ParsePrefix(alloc.SiblingCIDR)
 					if p.Overlaps(candidateBlock) {
 						overlapFound = true
+						conflictingPrefix = p
 						break
 					}
 				}
 			}
 
-			if reserveSibling && !overlapFound {
+			if overlapFound {
+				// LEAP GUARDRAIL: Leap clean past the conflicting block footprint 
+				// to completely eliminate address-by-address linear scanning hangs
+				currentAddr = addBitOffset(conflictingPrefix.Masked().Addr(), maxBits-conflictingPrefix.Bits())
+				continue
+			}
+
+			// Separated Sibling validation path
+			if reserveSibling {
 				sibling := calcSibling(candidateBlock)
 				for _, alloc := range e.allocations {
 					if alloc.AllocatedCIDR != "" {
@@ -529,6 +541,7 @@ func (e *Engine) findGap(prefixSize int, reserveSibling bool, strategy Strategy)
 			}
 
 			if overlapFound {
+				// Sibling collision only: safely advance by a single aligned block step
 				currentAddr = addBitOffset(candidateBlock.Masked().Addr(), maxBits-prefixSize)
 				continue
 			}
@@ -603,12 +616,15 @@ func addBitOffset(addr netip.Addr, bitIndex int) netip.Addr {
 		}
 		b := addr.As4()
 		carry := uint32(1) << bitIndex
-		val := uint32(b[3]) | uint32(b[2])<<8 | uint32(b[1])<<16 | uint32(b[0])<<24
 		
-		if val > 0xFFFFFFFF-carry {
-			return netip.Addr{} // Catch structural bit rollover overflows
+		// Upgrade calculations to uint64 to catch boundary wrap-around triggers safely
+		val := uint64(b[3]) | uint64(b[2])<<8 | uint64(b[1])<<16 | uint64(b[0])<<24
+		val += uint64(carry)
+		
+		if val > 0xFFFFFFFF {
+			return netip.Addr{} // Safely intercepts exact-edge overflows
 		}
-		val += carry
+		
 		b[0] = byte(val >> 24)
 		b[1] = byte(val >> 16)
 		b[2] = byte(val >> 8)

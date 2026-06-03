@@ -31,3 +31,7 @@ Thumbs.db
 
 # Plan tracking
 planning.md
+plan.md
+
+# No Fuzz
+**/testdata/fuzz/

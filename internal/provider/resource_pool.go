@@ -25,7 +25,9 @@ var (
 	_ resource.ResourceWithImportState = (*poolResource)(nil)
 )
 
-type poolResource struct{}
+type poolResource struct {
+	preventSubnetDestruction bool
+}
 
 // poolResourceModel establishes configuration map layout fields for the framework schema.
 type poolResourceModel struct {
@@ -99,6 +101,7 @@ func (r *poolResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 						},
 						"reserve_sibling": schema.BoolAttribute{
 							Optional: true,
+							Computed: true,
 						},
 						"allocated_cidr": schema.StringAttribute{
 							Computed: true,
@@ -111,6 +114,22 @@ func (r *poolResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 		},
 	}
+}
+
+func (r *poolResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+	if req.ProviderData == nil {
+		return
+	}
+
+	prevent, ok := req.ProviderData.(bool)
+	if !ok {
+		resp.Diagnostics.AddError(
+			"Unexpected Provider Data Type",
+			fmt.Sprintf("Expected a boolean provider data token, got: %T", req.ProviderData),
+		)
+		return
+	}
+	r.preventSubnetDestruction = prevent
 }
 
 func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -129,7 +148,6 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	// ID builds structural synthetic keys required by Terraform lifecycle interfaces
 	plan.ID = types.StringValue(org + ":" + proj + ":" + netw + ":" + plan.CIDR.ValueString())
 
 	eng, err := ipam.NewEngine(plan.CIDR.ValueString())
@@ -165,12 +183,22 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 		},
 	}
 
-	// Process keys in alphabetical order to maintain state file determinism
 	keys := make([]string, 0, len(planAllocs))
 	for k := range planAllocs {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+
+	// ADVANCED SORTING: Sort keys by network size descending (largest block footprints first)
+	// to implement First-Fit Decreasing alignment packing and fully eliminate dead-zone fragmentation.
+	// Ties on identical sizing revert to alphabetical order for strict state determinism.
+	sort.SliceStable(keys, func(i, j int) bool {
+		sizeI := planAllocs[keys[i]].PrefixSize.ValueInt64()
+		sizeJ := planAllocs[keys[j]].PrefixSize.ValueInt64()
+		if sizeI == sizeJ {
+			return keys[i] < keys[j]
+		}
+		return sizeI < sizeJ // Smaller prefix bit size implies a larger mathematical address block width
+	})
 
 	for _, k := range keys {
 		v := planAllocs[k]
@@ -196,7 +224,6 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 		resultElements[k] = objVal
 	}
 
-	// Fix: Null map checks maintain exact model symmetry, eliminating inconsistent state panics
 	if plan.Allocations.IsNull() {
 		plan.Allocations = types.MapNull(allocObjectType)
 	} else {
@@ -215,7 +242,6 @@ func (r *poolResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	// Rehydrate state attributes from composite IDs during logical imports
 	if state.Organization.IsNull() || state.Organization.IsUnknown() || state.CIDR.IsNull() || state.CIDR.IsUnknown() {
 		parts := strings.SplitN(state.ID.ValueString(), ":", 4)
 		if len(parts) == 4 {
@@ -268,8 +294,19 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		planAllocs = make(map[string]allocationModel)
 	}
 
-	// Re-register ALL existing allocations into the engine so it can evaluate
-	// size/sibling expansions relative to the entire active topology footprint.
+	// INTERCEPTION GUARDRAIL: If provider safety is active, block attempts to drop subnets from the map
+	if r.preventSubnetDestruction {
+		for k := range stateAllocs {
+			if _, exists := planAllocs[k]; !exists {
+				resp.Diagnostics.AddError(
+					"Subnet Destruction Blocked",
+					fmt.Sprintf("Allocation key %q was removed from the HCL map configuration. The provider safety flag 'prevent_subnet_destruction' is active and blocks this deletion to protect downstream cloud network interfaces.", k),
+				)
+				return
+			}
+		}
+	}
+
 	for k, v := range stateAllocs {
 		if v.AllocatedCIDR.IsNull() || v.AllocatedCIDR.IsUnknown() {
 			continue
@@ -296,13 +333,21 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	for k := range planAllocs {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+
+	// ADVANCED SORTING: Enforce identical size-descending and alphabetical tie-breaker logic
+	// during updates to guarantee immutable stability across state hydration runs.
+	sort.SliceStable(keys, func(i, j int) bool {
+		sizeI := planAllocs[keys[i]].PrefixSize.ValueInt64()
+		sizeJ := planAllocs[keys[j]].PrefixSize.ValueInt64()
+		if sizeI == sizeJ {
+			return keys[i] < keys[j]
+		}
+		return sizeI < sizeJ
+	})
 
 	for _, k := range keys {
 		v := planAllocs[k]
 
-		// If the key already exists in our active engine memory, route it
-		// through UpdateAllocation to safely handle size mutations and sibling changes.
 		if _, err := eng.GetAllocation(k); err == nil {
 			err = eng.UpdateAllocation(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool(), strat)
 			if err != nil {
@@ -327,7 +372,6 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 			continue
 		}
 
-		// Otherwise, treat as a brand-new subnet addition
 		cidr, err := eng.Allocate(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool(), strat)
 		if err != nil {
 			resp.Diagnostics.AddError("Pool Allocation Failed", fmt.Sprintf("Key %s: %s", k, err.Error()))
@@ -362,7 +406,6 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 }
 
 func (r *poolResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
-	// Pure logical component requires no remote state teardown orchestration API sweeps
 }
 
 func (r *poolResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

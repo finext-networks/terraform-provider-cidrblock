@@ -1320,3 +1320,194 @@ func TestEngine_UpdateAllocation_HardenedInvariants(t *testing.T) {
 	})
 }
 
+func TestEngine_UpdateAllocation_DeepCoverageCompletion(t *testing.T) {
+	t.Run("Invalidation 4: Right-Hand Block At New Size Tier", func(t *testing.T) {
+		eng, _ := NewEngine("10.0.0.0/24")
+		eng.RegisterExistingAllocation("target", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.128/26"})
+		
+		// Upgrading size to /25 is binary-aligned, but 10.0.0.128/25 is a right-hand block of 10.0.0.0/24.
+		// Activating a sibling reservation on it must fail validation.
+		err := eng.UpdateAllocation("target", 25, true, StrategyFirst)
+		if err == nil || !strings.Contains(err.Error(), "is a right-hand (upper-half) block at this size tier") {
+			t.Errorf("Expected right-hand tier expansion error, got: %v", err)
+		}
+	})
+
+	t.Run("Invalidation 5: Sibling Out Of Pool Bounds During Upgrade", func(t *testing.T) {
+		eng, _ := NewEngine("10.0.0.0/24")
+		eng.RegisterExistingAllocation("target", &Allocation{PrefixSize: 25, AllocatedCIDR: "10.0.0.0/25"})
+		
+		// Upgrading size to /24 expands the block to fill the entire pool. 
+		// If reserve_sibling=true, the calculated sibling is 10.0.1.0/24, which falls out of pool boundaries.
+		err := eng.UpdateAllocation("target", 24, true, StrategyFirst)
+		if err == nil || !strings.Contains(err.Error(), "falls outside the master pool boundaries") {
+			t.Errorf("Expected out-of-bounds companion error, got: %v", err)
+		}
+	})
+
+	t.Run("Invalidation 6: Proposed Sibling Overlaps With Existing Sibling", func(t *testing.T) {
+		eng, _ := NewEngine("10.0.0.0/24")
+		eng.RegisterExistingAllocation("blocker", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.128/26", SiblingCIDR: "10.0.0.64/26"})
+		eng.RegisterExistingAllocation("target", &Allocation{PrefixSize: 27, AllocatedCIDR: "10.0.0.0/27"})
+		
+		// Upgrading target to /26 with a sibling places its sibling at 10.0.0.64/26, colliding with blocker's sibling.
+		err := eng.UpdateAllocation("target", 26, true, StrategyFirst)
+		if err == nil || !strings.Contains(err.Error(), "is already reserved as a sibling") {
+			t.Errorf("Expected sibling-on-sibling collision error, got: %v", err)
+		}
+	})
+
+	t.Run("Static Toggle Sibling Overlaps Active Allocation", func(t *testing.T) {
+		eng, _ := NewEngine("10.0.0.0/24")
+		eng.RegisterExistingAllocation("blocker", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.64/26"})
+		eng.RegisterExistingAllocation("target", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.0/26", ReserveSibling: false})
+		
+		// Turning on a sibling for target points directly to 10.0.0.64/26, which is occupied by blocker's primary allocation.
+		err := eng.UpdateAllocation("target", 26, true, StrategyFirst)
+		if err == nil || !strings.Contains(err.Error(), "is already occupied by") {
+			t.Errorf("Expected static sibling collision error, got: %v", err)
+		}
+	})
+
+	t.Run("Static Toggle Sibling Overlaps Existing Sibling", func(t *testing.T) {
+		eng, _ := NewEngine("10.0.0.0/24")
+		eng.RegisterExistingAllocation("blocker", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.128/26", SiblingCIDR: "10.0.0.64/26"})
+		eng.RegisterExistingAllocation("target", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.0/26", ReserveSibling: false})
+		
+		// Turning on a sibling for target points to 10.0.0.64/26, which is already claimed by blocker's sibling reservation.
+		err := eng.UpdateAllocation("target", 26, true, StrategyFirst)
+		if err == nil || !strings.Contains(err.Error(), "is already reserved by") {
+			t.Errorf("Expected static sibling-on-sibling collision error, got: %v", err)
+		}
+	})
+
+	t.Run("AvailableSlices Internal Sibling Evaluation Scan", func(t *testing.T) {
+		eng, _ := NewEngine("10.0.0.0/24")
+		eng.RegisterExistingAllocation("k1", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.128/26", SiblingCIDR: "10.0.0.0/26"})
+		
+		// Forces the overlap condition checker to evaluate an active sibling reservation while parsing available empty segments.
+		slices := eng.AvailableSlices()
+		if len(slices) == 0 {
+			t.Error("Expected slices to be populated during tracking map scans")
+		}
+	})
+}
+
+func TestEngine_Coverage_MeticulousEdgeGaps(t *testing.T) {
+	t.Run("Line 207: Expansion overlaps with an existing sibling CIDR", func(t *testing.T) {
+		eng, _ := NewEngine("10.0.0.0/24")
+		eng.RegisterExistingAllocation("blocker", &Allocation{
+			PrefixSize:    27,
+			AllocatedCIDR: "10.0.0.128/27",
+			SiblingCIDR:   "10.0.0.32/27",
+		})
+		eng.RegisterExistingAllocation("target", &Allocation{
+			PrefixSize:    28,
+			AllocatedCIDR: "10.0.0.0/28",
+		})
+		
+		// Expanding target to /26 covers 10.0.0.0 - 10.0.0.63, which clips blocker's sibling (10.0.0.32/27)
+		err := eng.UpdateAllocation("target", 26, false, StrategyFirst)
+		if err == nil || !strings.Contains(err.Error(), "overlaps with reserved sibling of") {
+			t.Errorf("Expected overlap with reserved sibling error, got: %v", err)
+		}
+	})
+
+	t.Run("Line 268: Static sibling toggle out of pool boundaries", func(t *testing.T) {
+		eng, _ := NewEngine("10.0.0.0/24")
+		// Register a block that fills the entire pool. It is left-hand aligned relative to its parent 
+		// bit structure (/24 inside a /23 parent tree space), bypassing the right-hand gate.
+		eng.RegisterExistingAllocation("edge_block", &Allocation{
+			PrefixSize:     24,
+			AllocatedCIDR:  "10.0.0.0/24",
+			ReserveSibling: false,
+		})
+		
+		// Toggling sibling to true tries to reserve 10.0.1.0/24, which breaks pool container limits
+		err := eng.UpdateAllocation("edge_block", 24, true, StrategyFirst)
+		if err == nil || !strings.Contains(err.Error(), "companion block is out of pool boundaries") {
+			t.Errorf("Expected out of pool bounds sibling error, got: %v", err)
+		}
+	})
+
+	t.Run("Line 444: findGap candidate block overlaps with an existing sibling CIDR", func(t *testing.T) {
+		eng, _ := NewEngine("10.0.0.0/24")
+		eng.RegisterExistingAllocation("blocker", &Allocation{
+			PrefixSize:    28,
+			AllocatedCIDR: "10.0.0.128/28",
+			SiblingCIDR:   "10.0.0.0/28",
+		})
+		
+		// Allocation search loops must intercept the collision at .0/28 and leap past it
+		cidr, err := eng.Allocate("new_alloc", 28, false, StrategyFirst)
+		if err != nil {
+			t.Fatalf("Expected allocation to succeed by skipping sibling gap, got: %v", err)
+		}
+		if cidr == "10.0.0.0/28" {
+			t.Errorf("Allocation should have skipped 10.0.0.0/28 due to active sibling reservation collision")
+		}
+	})
+
+	t.Run("Line 463: findGap proposed sibling overlaps with an existing sibling CIDR", func(t *testing.T) {
+		eng, _ := NewEngine("10.0.0.0/24")
+		eng.RegisterExistingAllocation("blocker", &Allocation{
+			PrefixSize:    28,
+			AllocatedCIDR: "10.0.0.128/28",
+			SiblingCIDR:   "10.0.0.16/28",
+		})
+		
+		// Allocating at 10.0.0.0/28 with reserveSibling=true sets its sibling to .16/28,
+		// which collides with blocker's sibling. The gap finder must cleanly skip this.
+		_, err := eng.Allocate("new_paired_alloc", 28, true, StrategyFirst)
+		if err != nil && !errors.Is(err, ErrPoolExhausted) {
+			t.Fatalf("Unexpected error processing gap sequence: %v", err)
+		}
+	})
+}
+
+func TestEngine_FindGap_SiblingOverlapCoverage(t *testing.T) {
+	eng, _ := NewEngine("10.0.0.0/24")
+	
+	// Pre-seed an allocation that holds a sibling reservation exactly where a new allocation 
+	// would naturally want to land, forcing the gap finder to scan past it.
+	eng.RegisterExistingAllocation("holder", &Allocation{
+		PrefixSize:    28,
+		AllocatedCIDR: "10.0.0.128/28",
+		SiblingCIDR:   "10.0.0.0/28",
+	})
+
+	// Triggers the primary lookup loop to evaluate an allocation colliding with an active sibling
+	_, err := eng.Allocate("new_sub", 28, false, StrategyFirst)
+	if err != nil {
+		t.Fatalf("Expected allocation to succeed by hopping over sibling reservation, got: %v", err)
+	}
+}
+
+func TestEngine_FindGap_LinearScanLeapOptimization(t *testing.T) {
+	t.Run("Prevent linear-scan execution hangs on wide overlapping blocks", func(t *testing.T) {
+		// Instantiate a broad supernet pool container
+		eng, _ := NewEngine("10.0.0.0/8")
+
+		// Pre-allocate a large continuous blocking footprint at the very beginning of the pool.
+		// A /16 block consumes 65,536 individual IP addresses. 
+		// Previously, a /32 micro-subnet request would attempt to step through this entire block address-by-address.
+		_, err := eng.Allocate("massive_block", 16, false, StrategyFirst)
+		if err != nil {
+			t.Fatalf("Setup failed: could not allocate initial blocking prefix: %v", err)
+		}
+
+		// Request a micro-subnet allocation (/32).
+		// The engine must immediately leap past the 65,536-address obstacle in a single O(1) step.
+		cidr, err := eng.Allocate("micro_subnet", 32, false, StrategyFirst)
+		if err != nil {
+			t.Fatalf("Expected micro-subnet allocation to succeed via leap optimization, got error: %v", err)
+		}
+
+		// Verify that the allocation bypassed the obstacle cleanly and landed exactly on the next valid boundary
+		expected := "10.1.0.0/32"
+		if cidr != expected {
+			t.Errorf("Expected allocation to skip blocker and land at %q, got: %q", expected, cidr)
+		}
+	})
+}
+

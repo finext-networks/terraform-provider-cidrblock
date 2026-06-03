@@ -1,16 +1,23 @@
 # Terraform Provider CIDR Block (`cidrblock`)
 
-A stateless, pure-calculation IP Address Management (IPAM) Terraform provider designed to handle deterministic subnet allocations directly inside your infrastructure-as-code pipelines. 
+A deterministic, pure-calculation IP Address Management (IPAM) utility designed to handle collision-free subnet allocations directly inside your infrastructure-as-code pipelines. 
 
-Unlike traditional IPAM solutions, this provider requires **no external database, stateful API, or IPAM server**. It models the entire address space as an atomic grid using binary boundary mapping, calculating collision-free allocations dynamically from a defined supernet pool.
+Unlike traditional IPAM suites, this provider requires **no external database, stateful API, or standalone IPAM server**. It isolates the core logic as a calculation engine, offloading long-term persistence entirely to the native `terraform.tfstate` ledger. This ensures that your local environment retains a stable, immutable mapping of your layout tree across subsequent pipeline runs.
+
+## Provider Configuration
+
+```hcl
+provider "cidrblock" {
+  # Safety Guardrail: When true, explicitly blocks any terraform apply configurations 
+  # that attempt to delete active subnet keys from an existing pool resource.
+  prevent_subnet_destruction = true
+}
+```
 
 ## Features
 
-* **100% Stateless Operations:** Subnet allocations are computed deterministically on-the-fly during Terraform plan/apply lifecycles based purely on your configuration mapping.
-* **Algorithmic Allocation Strategies:**
-  * `FIRST`: Places subnets sequentially in the first available aligned gap (minimized search overhead).
-  * `BEST`: Minimizes fragmentation by matching requests to the tightest fitting available continuous space.
-  * `SPARSE`: Maximizes isolation distance between subnets by dropping new allocations into the largest available block chunks.
+* **State-Retained Persisted Output Mapping:** Allocation structures are computed dynamically on-the-fly during Terraform execution, using the local state file to lock down address boundaries once committed.
+* **First-Fit Decreasing (FFD) Layout Sorting:** Allocations are automatically sorted by network footprint size descending before evaluation. This ensures large networks are placed first, eliminating binary boundary alignment "dead zones" and maximizing pool density. Ties on identical sizing revert to alphabetical order for strict state determinism.
 * **Automated Buddy/Sibling Reservations:** Lock down adjacent mirror subnets natively (e.g., reserving a matching `/24` partner for an active `/24` deployment). Sibling placement is mathematically restricted to left-hand (lower-half) aligned blocks to guarantee predictable expansion boundaries.
 * **Dual-Stack Capability:** Seamless processing of both IPv4 and IPv6 addressing families down to micro-subnet definitions (e.g., `/128` inside an IPv6 `/48`).
 * **Production-Grade Resilience:** Core layout engine hardened against in-place update mutation errors, bit-shift boundaries, memory masking overflows, and algorithmic calculation hangs ($O(M)$ computational scaling where $M$ is active keys).
@@ -46,30 +53,17 @@ resource "cidrblock_pool" "vpc_prod" {
   allocation_strategy = "FIRST"
 
   allocations = {
+    # Written in any block order, the provider's FFD scheduler will automatically 
+    # process public_aza first (/24), then database_aza (/26) for optimal tree packing.
+    database_aza = {
+      prefix_size     = 26
+      reserve_sibling = false
+    }
     public_aza = {
       prefix_size     = 24
-      reserve_sibling = true  # Allocates 10.100.0.0/24 and reserves 10.100.1.0/24 (Left-hand aligned)
-    }
-    private_aza = {
-      prefix_size     = 22     # Consumes 10.100.4.0/22 (Leaps cleanly past public's reserved space)
-      reserve_sibling = false
-    }
-    database_aza = {
-      prefix_size     = 26     # Consumes 10.100.8.0/26
-      reserve_sibling = false
+      reserve_sibling = true  # Allocates 10.100.0.0/24 and reserves 10.100.1.0/24
     }
   }
-}
-
-# Pass calculated allocations down into cloud infrastructure resources smoothly
-resource "aws_subnet" "public" {
-  vpc_id     = aws_vpc.main.id
-  cidr_block = cidrblock_pool.vpc_prod.allocations["public_aza"].allocated_cidr
-}
-
-resource "aws_subnet" "private" {
-  vpc_id     = aws_vpc.main.id
-  cidr_block = cidrblock_pool.vpc_prod.allocations["private_aza"].allocated_cidr
 }
 ```
 
@@ -86,37 +80,7 @@ To safeguard production topologies, the calculation engine enforces strict const
 
 ---
 
-## Querying with Data Sources
-
-You can audit current structural footprints, fetch real-time address capacity metrics, and discover open layout fragments via the companion read-only data source block:
-
-```hcl
-data "cidrblock_pool" "audit" {
-  id   = "finext:core-banking:prod-east"
-  cidr = "10.100.0.0/20"
-}
-
-output "remaining_free_ips" {
-  value = data.cidrblock_pool.audit.metrics.available_ips
-}
-
-output "unallocated_gaps_report" {
-  value = data.cidrblock_pool.audit.available_slices
-}
-```
-
----
-
 ## Development & Testing
-
-### Building From Source
-Clone the repository and compile the provider binary locally using the Go toolchain:
-
-```bash
-git clone https://github.com/finext-networks/terraform-provider-cidrblock.git
-cd terraform-provider-cidrblock
-go build -o terraform-provider-cidrblock
-```
 
 ### Running the Test Suite
 The repository includes unit tests, strategy matrix evaluations, and intensive integration acceptance testing hooks using the Terraform Plugin Testing framework:

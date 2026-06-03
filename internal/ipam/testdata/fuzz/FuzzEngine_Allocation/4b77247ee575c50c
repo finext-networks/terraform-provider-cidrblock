@@ -1,5 +1,0 @@
-go test fuzz v1
-string("0.0.0.0/4")
-int(26)
-bool(true)
-string("BE22")

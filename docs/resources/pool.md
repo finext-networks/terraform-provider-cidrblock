@@ -1,6 +1,13 @@
 # cidrblock_pool (`Resource`)
 
-Manages an atomic IP address prefix pool allocation layout grid. This resource operates as a stateless calculation engine using continuous boundary mapping to compute and track allocated CIDR blocks without an external database back-end.
+Manages an atomic IP address prefix pool allocation layout grid. This resource operates as a stateless calculation engine using continuous boundary mapping to compute and track allocated CIDR blocks, offloading long-term persistence entirely to your local `terraform.tfstate` ledger.
+
+## First-Fit Decreasing (FFD) Allocation Sorting
+
+To optimize layout packing density and prevent artificial alignment gaps, this provider implements a **First-Fit Decreasing (FFD)** scheduler whenever the allocation map is parsed during `Create` or `Update` execution passes:
+
+1. **Size-Descending Evaluation:** The provider automatically intercepts requests and re-orders processing keys based on their requested `prefix_size` ascending (widest subnet footprints evaluated first). This guarantees large subnets (e.g., `/22`) capture natural boundary positions before smaller masks (e.g., `/24`) fragment the available space.
+2. **Alphabetical String Tie-Breaker:** If multiple subnets share an identical size specification, the scheduler falls back to sorting alphabetically by their map key strings. This maintains a perfectly deterministic execution sequence across subsequent plan runs and eliminates unexpected state drift.
 
 ## Example Usage
 
@@ -13,24 +20,17 @@ resource "cidrblock_pool" "vpc_network" {
   allocation_strategy = "FIRST"
 
   allocations = {
+    # Written in any order, the FFD scheduler will evaluate 'private_aza' first (/22) 
+    # to establish a clean alignment baseline, completely avoiding address fragmentation.
     public_aza = {
       prefix_size     = 24
-      reserve_sibling = true # Reserves 10.0.1.0/24 immediately as a buddy partner (Valid: Left-hand aligned)
+      reserve_sibling = true 
     }
     private_aza = {
-      prefix_size     = 22   # Consumes 10.0.4.0/22
-      reserve_sibling = false
-    }
-    database_aza = {
-      prefix_size     = 26   # Consumes 10.0.8.0/26
+      prefix_size     = 22
       reserve_sibling = false
     }
   }
-}
-
-# Consuming generated address space blocks downstream
-output "public_subnet_cidr" {
-  value = cidrblock_pool.vpc_network.allocations["public_aza"].allocated_cidr
 }
 ```
 
@@ -47,9 +47,9 @@ output "public_subnet_cidr" {
 
 - `allocation_strategy` (String) Algorithmic layout search placement logic strategy choice:
   - `FIRST`: Claims the lowest naturally aligned free gap (Default).
-  - `BEST`: Claims the smallest possible free slice space fitting the query, isolating fragments.
-  - `SPARSE`: Claims the largest open contiguous block space chunk, maximizing network isolation.
-- `allocations` (Map of Object) Nested map tracking independent requested subnets. (see [below for nested schema](#nestedblock--allocations))
+  - `BEST`: Claims the smallest possible free slice space fitting the query.
+  - `SPARSE`: Claims the largest open contiguous block space chunk.
+- `allocations` (Map of Object) Nested map tracking independent requested subnets.
 
 ### Computed
 
