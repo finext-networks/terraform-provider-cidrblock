@@ -156,7 +156,8 @@ func (e *Engine) Allocate(key string, prefixSize int, reserveSibling bool, strat
 	return cidr.String(), nil
 }
 
-// UpdateAllocation manages modification processing while maintaining stability invariants.
+// UpdateAllocation updates an existing allocation's properties, enforcing strict base-address
+// immutability and validating that sibling requests are restricted exclusively to left-hand aligned blocks.
 func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling bool, strategy Strategy) error {
 	alloc, exists := e.allocations[key]
 	if !exists {
@@ -172,43 +173,129 @@ func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling boo
 		return ErrInvalidPrefix
 	}
 
-	// Size changes force the allocation to completely clear and recalculate its placement
+	// Handle size mutations strictly within the current anchored base coordinate
 	if prefixSize != alloc.PrefixSize {
-		delete(e.allocations, key)
+		oldPrefix := netip.MustParsePrefix(alloc.AllocatedCIDR)
+		proposedPrefix := netip.PrefixFrom(oldPrefix.Addr(), prefixSize).Masked()
 
-		cidr, err := e.findGap(prefixSize, reserveSibling, strategy)
-		if err != nil {
-			return err
+		// INVALIDATION 1: Enforce base-address immutability
+		if proposedPrefix.Addr() != oldPrefix.Addr() {
+			return fmt.Errorf("increasing size to /%d breaks binary alignment boundaries at the current address %s (requires shifting base to %s). Subnets cannot be automatically relocated; delete and recreate the allocation to move it", 
+				prefixSize, oldPrefix.Addr(), proposedPrefix.Addr())
 		}
 
-		alloc = &Allocation{
-			PrefixSize:     prefixSize,
-			ReserveSibling: reserveSibling,
-			AllocatedCIDR:  cidr.String(),
+		// INVALIDATION 2: Verify the expanded boundary doesn't run outside the master pool
+		if !e.poolPrefix.Contains(proposedPrefix.Addr()) || proposedPrefix.Bits() < e.poolPrefix.Bits() {
+			return fmt.Errorf("expanded prefix %s extends outside pool boundaries", proposedPrefix)
 		}
 
-		if reserveSibling {
-			sibling := calcSibling(cidr)
-			if sibling.IsValid() {
-				alloc.SiblingCIDR = sibling.String()
+		// INVALIDATION 3: Verify the expanded footprint doesn't collide with any OTHER subnets
+		for k, v := range e.allocations {
+			if k == key {
+				continue // Skip self
+			}
+			if v.AllocatedCIDR != "" {
+				p, _ := netip.ParsePrefix(v.AllocatedCIDR)
+				if p.Overlaps(proposedPrefix) {
+					return fmt.Errorf("expanded prefix %s overlaps with existing allocation %q", proposedPrefix, k)
+				}
+			}
+			if v.SiblingCIDR != "" {
+				p, _ := netip.ParsePrefix(v.SiblingCIDR)
+				if p.Overlaps(proposedPrefix) {
+					return fmt.Errorf("expanded prefix %s overlaps with reserved sibling of %q", proposedPrefix, k)
+				}
 			}
 		}
 
-		e.allocations[key] = alloc
+		var proposedSibling netip.Prefix
+		if reserveSibling {
+			// INVALIDATION 4: Enforce left-hand alignment for buddy expansion compatibility
+			parentPrefix := netip.PrefixFrom(proposedPrefix.Addr(), prefixSize-1).Masked()
+			if proposedPrefix.Addr() != parentPrefix.Addr() {
+				return fmt.Errorf("allocation %s is a right-hand (upper-half) block at this size tier and cannot claim a forward sibling reservation", proposedPrefix)
+			}
+
+			// Calculate the new next-block sibling location
+			proposedSibling = netip.PrefixFrom(addBitOffset(proposedPrefix.Addr(), maxPrefix-prefixSize), prefixSize)
+			
+			// INVALIDATION 5: Verify the companion block falls inside pool boundaries
+			if !proposedSibling.IsValid() || !e.poolPrefix.Contains(proposedSibling.Addr()) {
+				return fmt.Errorf("the requested companion block falls outside the master pool boundaries. Toggle reserve_sibling to false")
+			}
+
+			// INVALIDATION 6: Verify the next continuous block isn't already claimed
+			for k, v := range e.allocations {
+				if k == key {
+					continue
+				}
+				if v.AllocatedCIDR != "" {
+					p, _ := netip.ParsePrefix(v.AllocatedCIDR)
+					if p.Overlaps(proposedSibling) {
+						return fmt.Errorf("the next continuous block (%s) is already occupied by allocation %q. Toggle reserve_sibling to false to expand in-place", 
+							proposedSibling, k)
+					}
+				}
+				if v.SiblingCIDR != "" {
+					p, _ := netip.ParsePrefix(v.SiblingCIDR)
+					if p.Overlaps(proposedSibling) {
+						return fmt.Errorf("the next continuous block (%s) is already reserved as a sibling by allocation %q. Toggle reserve_sibling to false to expand in-place", 
+							proposedSibling, k)
+					}
+				}
+			}
+		}
+
+		// COMMIT: Expansion is safe, clean, and perfectly anchored in-place
+		alloc.PrefixSize = prefixSize
+		alloc.ReserveSibling = reserveSibling
+		alloc.AllocatedCIDR = proposedPrefix.String()
+		if reserveSibling {
+			alloc.SiblingCIDR = proposedSibling.String()
+		} else {
+			alloc.SiblingCIDR = ""
+		}
 		return nil
 	}
 
-	// Non-size changes (toggling sibling reservations) are processed safely in place
-	alloc.ReserveSibling = reserveSibling
-	if reserveSibling {
-		prefix := netip.MustParsePrefix(alloc.AllocatedCIDR)
-		sibling := calcSibling(prefix)
-		if sibling.IsValid() {
+	// Handle non-size mutations (toggling sibling reservations on a completely static prefix size)
+	if reserveSibling != alloc.ReserveSibling {
+		if reserveSibling {
+			prefix := netip.MustParsePrefix(alloc.AllocatedCIDR)
+
+			// INVALIDATION: Enforce left-hand alignment on static sibling toggles
+			parentPrefix := netip.PrefixFrom(prefix.Addr(), prefix.Bits()-1).Masked()
+			if prefix.Addr() != parentPrefix.Addr() {
+				return fmt.Errorf("allocation %s is a right-hand block and cannot claim a forward buddy pair", prefix)
+			}
+
+			sibling := netip.PrefixFrom(addBitOffset(prefix.Addr(), maxPrefix-prefix.Bits()), prefix.Bits())
+			if !sibling.IsValid() || !e.poolPrefix.Contains(sibling.Addr()) {
+				return fmt.Errorf("companion block is out of pool boundaries")
+			}
+
+			for k, v := range e.allocations {
+				if k == key {
+					continue
+				}
+				if v.AllocatedCIDR != "" {
+					p, _ := netip.ParsePrefix(v.AllocatedCIDR)
+					if p.Overlaps(sibling) {
+						return fmt.Errorf("target block %s is already occupied by %q", sibling, k)
+					}
+				}
+				if v.SiblingCIDR != "" {
+					p, _ := netip.ParsePrefix(v.SiblingCIDR)
+					if p.Overlaps(sibling) {
+						return fmt.Errorf("target block %s is already reserved by %q", sibling, k)
+					}
+				}
+			}
 			alloc.SiblingCIDR = sibling.String()
-			return nil
+		} else {
+			alloc.SiblingCIDR = ""
 		}
-	} else {
-		alloc.SiblingCIDR = ""
+		alloc.ReserveSibling = reserveSibling
 	}
 
 	return nil

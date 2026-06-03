@@ -11,9 +11,9 @@ Unlike traditional IPAM solutions, this provider requires **no external database
   * `FIRST`: Places subnets sequentially in the first available aligned gap (minimized search overhead).
   * `BEST`: Minimizes fragmentation by matching requests to the tightest fitting available continuous space.
   * `SPARSE`: Maximizes isolation distance between subnets by dropping new allocations into the largest available block chunks.
-* **Automated Buddy/Sibling Reservations:** Lock down adjacent mirror subnets natively (e.g., reserving a matching `/24` partner for an active `/24` deployment to account for forward-looking high-availability clustering).
+* **Automated Buddy/Sibling Reservations:** Lock down adjacent mirror subnets natively (e.g., reserving a matching `/24` partner for an active `/24` deployment). Sibling placement is mathematically restricted to left-hand (lower-half) aligned blocks to guarantee predictable expansion boundaries.
 * **Dual-Stack Capability:** Seamless processing of both IPv4 and IPv6 addressing families down to micro-subnet definitions (e.g., `/128` inside an IPv6 `/48`).
-* **Production-Grade Resilience:** Core layout engine hardened with extensive differential fuzz testing to eliminate bit-shift boundaries, memory masking overflows, and algorithmic calculation hangs ($O(M)$ computational scaling where $M$ is active keys).
+* **Production-Grade Resilience:** Core layout engine hardened against in-place update mutation errors, bit-shift boundaries, memory masking overflows, and algorithmic calculation hangs ($O(M)$ computational scaling where $M$ is active keys).
 
 ---
 
@@ -43,15 +43,15 @@ resource "cidrblock_pool" "vpc_prod" {
   organization        = "finext"
   project             = "core-banking"
   network             = "prod-east"
-  allocation_strategy = "BEST"
+  allocation_strategy = "FIRST"
 
   allocations = {
     public_aza = {
       prefix_size     = 24
-      reserve_sibling = true  # Automatically allocates 10.100.0.0/24 and reserves 10.100.1.0/24
+      reserve_sibling = true  # Allocates 10.100.0.0/24 and reserves 10.100.1.0/24 (Left-hand aligned)
     }
     private_aza = {
-      prefix_size     = 22     # Consumes 10.100.4.0/22
+      prefix_size     = 22     # Consumes 10.100.4.0/22 (Leaps cleanly past public's reserved space)
       reserve_sibling = false
     }
     database_aza = {
@@ -72,6 +72,17 @@ resource "aws_subnet" "private" {
   cidr_block = cidrblock_pool.vpc_prod.allocations["private_aza"].allocated_cidr
 }
 ```
+
+---
+
+## Lifecycle & Mutation Invariants
+
+To safeguard production topologies, the calculation engine enforces strict constraints during subsequent `terraform apply` operations:
+
+* **Base-Address Immutability:** Once a subnet is assigned an address, its base coordinate is anchored. The provider will never automatically shift or float an existing subnet's base IP to fulfill a layout change.
+* **Unaligned Upgrades:** Modifying the bit mask length of an active subnet (e.g., growing from `/25` to `/24`) is strictly evaluated as an anchored in-place expansion. If the current base address is mathematically incompatible with the new size's natural alignment boundaries, the update returns a hard allocation error. Moving unaligned blocks requires an explicit delete-and-recreate sequence.
+* **Left-Hand Buddy Constraint:** Sibling reservations (`reserve_sibling = true`) are only valid on left-hand (lower-half) aligned blocks of a given tier size. Attempting to assign or toggle a sibling reservation on a right-hand block returns a hard validation error.
+* **Sibling Absorption:** To absorb an active sibling reservation block during a size expansion, increase the `prefix_size` and toggle `reserve_sibling = false` simultaneously.
 
 ---
 
@@ -130,4 +141,4 @@ go test ./internal/ipam/... -fuzz=FuzzEngine_Allocation -fuzztime=60s
 ## License
 
 This project is licensed under the Mozilla Public License, v. 2.0. See the `LICENSE` file for full details.
-```
+

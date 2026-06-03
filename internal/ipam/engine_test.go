@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -679,25 +680,33 @@ func TestEngine_PoolStifledBySiblingExhaustion(t *testing.T) {
 func TestEngine_UnalignedReallocationJump(t *testing.T) {
 	eng, err := NewEngine("10.0.0.0/24")
 	if err != nil {
-		t.Fatalf("Failed to initialize engine: %v", err)
+		t.Fatalf("Failed to create engine: %v", err)
 	}
 
-	// Establish a fragmented layout manually using existing state injection
-	eng.RegisterExistingAllocation("subnet_a", &Allocation{PrefixSize: 28, AllocatedCIDR: "10.0.0.0/28"})
-	eng.RegisterExistingAllocation("subnet_b", &Allocation{PrefixSize: 28, AllocatedCIDR: "10.0.0.16/28"})
-	eng.RegisterExistingAllocation("subnet_c", &Allocation{PrefixSize: 28, AllocatedCIDR: "10.0.0.32/28"})
-
-	// Update subnet_b from a /28 to an expanded /27 footprint.
-	// It cannot stay at .16 (unaligned for /27) and cannot use .32 (blocked by subnet_c).
-	// It must shift forward to the next valid boundary: .64/27
-	err = eng.UpdateAllocation("subnet_b", 27, false, StrategyFirst)
+	// Allocate initial blocks, discarding the returned prefix token
+	_, err = eng.Allocate("subnet_a", 28, false, StrategyFirst) // Takes 10.0.0.0/28
 	if err != nil {
-		t.Fatalf("Update allocation failed: %v", err)
+		t.Fatalf("Failed to allocate subnet_a: %v", err)
+	}
+	_, err = eng.Allocate("subnet_b", 28, false, StrategyFirst) // Takes 10.0.0.16/28
+	if err != nil {
+		t.Fatalf("Failed to allocate subnet_b: %v", err)
 	}
 
-	state := eng.GetState()
-	if state["subnet_b"].AllocatedCIDR != "10.0.0.64/27" {
-		t.Errorf("Expected expanded subnet to land at 10.0.0.64/27, got %s", state["subnet_b"].AllocatedCIDR)
+	// Attempting to update subnet_b from a /28 to a /27 at address .16 breaks binary alignment rules.
+	// The engine MUST return a hard error and refuse to automatically relocate it to 10.0.0.0/27.
+	err = eng.UpdateAllocation("subnet_b", 27, false, StrategyFirst)
+	if err == nil {
+		t.Fatalf("Expected update to fail due to unaligned base address mutation boundaries, but it succeeded")
+	}
+
+	// Verify the original allocation remains completely intact and unaffected by the failed update
+	alloc, err := eng.GetAllocation("subnet_b")
+	if err != nil {
+		t.Fatalf("Failed to retrieve subnet_b: %v", err)
+	}
+	if alloc.AllocatedCIDR != "10.0.0.16/28" {
+		t.Errorf("Expected subnet_b to remain anchored at 10.0.0.16/28, got %s", alloc.AllocatedCIDR)
 	}
 }
 
@@ -937,8 +946,9 @@ func TestEngine_Matrix_AllStrategiesHappyPath(t *testing.T) {
 				t.Fatalf("Failed to initialize engine: %v", err)
 			}
 
-			// 2. Verify sequential allocations pass cleanly across all strategies
-			addr1, err := eng.Allocate("subnet_1", 26, false, strat) // Request 64 hosts
+			// 2. Allocate our target block first. In an empty pool, this is guaranteed 
+			// to land on 10.0.0.0/26 across all strategies, giving us a valid Left-Hand anchor.
+			addr1, err := eng.Allocate("subnet_1", 26, false, strat) 
 			if err != nil {
 				t.Fatalf("Allocation 1 failed under strategy %s: %v", strat, err)
 			}
@@ -946,37 +956,36 @@ func TestEngine_Matrix_AllStrategiesHappyPath(t *testing.T) {
 				t.Errorf("Expected first block at .0/26, got %s", addr1)
 			}
 
-			// Define layout expectations based on strategic intent
-			expectedAddr2 := "10.0.0.64/26"
-			expectedSibling2 := "10.0.0.128/26"
-			if strat == StrategySparse {
-				expectedAddr2 = "10.0.0.128/26"
-				expectedSibling2 = "10.0.0.192/26"
-			}
-
-			addr2, err := eng.Allocate("subnet_2", 26, false, strat)
-			if err != nil {
-				t.Fatalf("Allocation 2 failed under strategy %s: %v", strat, err)
-			}
-			if addr2 != expectedAddr2 {
-				t.Errorf("Strategy %s: Expected second block at %s, got %s", strat, expectedAddr2, addr2)
-			}
-
-			// 3. Verify metric calculation consistency
-			metrics := eng.Metrics()
-			if metrics.AllocatedIPs != 128 {
-				t.Errorf("Expected 128 allocated IPs, got %d", metrics.AllocatedIPs)
-			}
-
-			// 4. Verify in-place configuration mutation update safety
-			err = eng.UpdateAllocation("subnet_2", 26, true, strat) // Toggle forward sibling reservation on
+			// 3. Verify inline configuration mutation update safety on our left-hand block
+			err = eng.UpdateAllocation("subnet_1", 26, true, strat) // Toggle forward sibling reservation on
 			if err != nil {
 				t.Fatalf("Inline update failed under strategy %s: %v", strat, err)
 			}
 
 			state := eng.GetState()
-			if state["subnet_2"].SiblingCIDR != expectedSibling2 {
-				t.Errorf("Strategy %s: Expected sibling reservation at %s, got %s", strat, expectedSibling2, state["subnet_2"].SiblingCIDR)
+			if state["subnet_1"].SiblingCIDR != "10.0.0.64/26" {
+				t.Errorf("Strategy %s: Expected sibling reservation at 10.0.0.64/26, got %s", strat, state["subnet_1"].SiblingCIDR)
+			}
+
+			// 4. Allocate a second subnet. It must skip the active sibling reservation (10.0.0.64/26)
+			// and drop into the next available slot at 10.0.0.128/26 across all strategies.
+			addr2, err := eng.Allocate("subnet_2", 26, false, strat)
+			if err != nil {
+				t.Fatalf("Allocation 2 failed under strategy %s: %v", strat, err)
+			}
+
+			expectedAddr2 := "10.0.0.128/26"
+			if addr2 != expectedAddr2 {
+				t.Errorf("Strategy %s: Expected second block at %s, got %s", strat, expectedAddr2, addr2)
+			}
+
+			// 5. Verify metric calculation consistency
+			metrics := eng.Metrics()
+			if metrics.AllocatedIPs != 128 { // subnet_1 (64) + subnet_2 (64)
+				t.Errorf("Expected 128 allocated IPs, got %d", metrics.AllocatedIPs)
+			}
+			if metrics.ReservedIPs != 64 { // subnet_1's sibling (64)
+				t.Errorf("Expected 64 reserved IPs, got %d", metrics.ReservedIPs)
 			}
 		})
 	}
@@ -1213,3 +1222,101 @@ func TestEngine_FinalCoverage_EngineGaps(t *testing.T) {
 	// 5. Clear calcSibling and findGap boundary breakouts
 	_ = calcSibling(netip.Prefix{})
 }
+
+func TestEngine_UpdateAllocation_HardenedInvariants(t *testing.T) {
+	// Initialize a master /24 test container pool
+	eng, err := NewEngine("10.0.0.0/24")
+	if err != nil {
+		t.Fatalf("Failed to initialize engine: %v", err)
+	}
+
+	// Pre-seed the pool with distinct topologies to test collision and alignment rules
+	// Left-hand aligned block at the start of the lower half
+	_, _ = eng.Allocate("subnet_left", 26, false, StrategyFirst)   // Claims 10.0.0.0/26
+
+	// Right-hand aligned block filling the upper half of that same tier
+	_, _ = eng.Allocate("subnet_right", 26, false, StrategyFirst)  // Claims 10.0.0.64/26
+
+	// Independent block sitting out-of-band in the second half of the pool
+	_, _ = eng.Allocate("subnet_blocker", 26, false, StrategyFirst) // Claims 10.0.0.128/26
+
+	t.Run("Gate 1: Enforce Base-Address Immutability", func(t *testing.T) {
+		// Attempting to scale up the right-hand block (10.0.0.64/26) to a /25 requires 
+		// shifting the base address backward to 10.0.0.0. The engine must reject this.
+		err := eng.UpdateAllocation("subnet_right", 25, false, StrategyFirst)
+		if err == nil {
+			t.Fatal("Expected error due to base-address mutation alignment breach, but got nil")
+		}
+		expectedMsg := "breaks binary alignment boundaries"
+		if !strings.Contains(err.Error(), expectedMsg) {
+			t.Errorf("Expected error message to contain %q, got: %v", expectedMsg, err)
+		}
+	})
+
+	t.Run("Gate 2: Verify Master Pool Boundaries", func(t *testing.T) {
+		engOOB, _ := NewEngine("10.0.0.0/24")
+		_, _ = engOOB.Allocate("root_sub", 24, false, StrategyFirst) // Claims 10.0.0.0/24 (Full Pool)
+
+		// Attempting to scale a full-pool resource up to a /23 runs off the edge of the master container
+		err := engOOB.UpdateAllocation("root_sub", 23, false, StrategyFirst)
+		if err == nil {
+			t.Fatal("Expected error due to master pool boundary overflow, but got nil")
+		}
+		// The engine safely catches this via its top-level prefix filter block
+		if !errors.Is(err, ErrInvalidPrefix) {
+			t.Errorf("Expected error %v, got: %v", ErrInvalidPrefix, err)
+		}
+	})
+
+	t.Run("Gate 3: Prevent Overlap Collisions With Other Subnets", func(t *testing.T) {
+		// Attempting to scale up subnet_left (10.0.0.0/26) to a /25 is binary-aligned,
+		// but expanding its width means it will step directly onto subnet_right (10.0.0.64/26).
+		err := eng.UpdateAllocation("subnet_left", 25, false, StrategyFirst)
+		if err == nil {
+			t.Fatal("Expected error due to expansion collision, but got nil")
+		}
+		expectedMsg := "overlaps with existing allocation"
+		if !strings.Contains(err.Error(), expectedMsg) {
+			t.Errorf("Expected error message to contain %q, got: %v", expectedMsg, err)
+		}
+	})
+
+	t.Run("Gate 4: Reject Forward Sibling Toggles on Right-Hand Blocks", func(t *testing.T) {
+		// Attempting to turn on reserve_sibling = true for a static right-hand block (10.0.0.64/26)
+		// must be caught and blocked because right-hand blocks cannot support horizontal forward expansions.
+		err := eng.UpdateAllocation("subnet_right", 26, true, StrategyFirst)
+		if err == nil {
+			t.Fatal("Expected error when requesting a sibling on an upper-half buddy alignment, but got nil")
+		}
+		expectedMsg := "cannot claim a forward buddy pair"
+		if !strings.Contains(err.Error(), expectedMsg) {
+			t.Errorf("Expected error message to contain %q, got: %v", expectedMsg, err)
+		}
+	})
+
+	t.Run("Gate 5: Detect Next-Block Sibling Claims During Upgrades", func(t *testing.T) {
+		engCascade, _ := NewEngine("10.0.0.0/22") // Massive pool to remove boundary limits
+		
+		// Setup a clean left-hand block
+		_, _ = engCascade.Allocate("sub_a", 24, false, StrategyFirst) // Claims 10.0.0.0/24
+		
+		// Drop a blocker right where sub_a's NEXT-TIER sibling would want to be (10.0.1.0/24 is fine, 10.0.2.0/23 is next)
+		_, _ = engCascade.Allocate("sub_block", 24, false, StrategyFirst) // Claims 10.0.1.0/24
+		_, _ = engCascade.Allocate("sub_clash", 24, false, StrategyFirst) // Claims 10.0.2.0/24 (This blocks a /23 sibling!)
+
+		// Free up sub_block so sub_a can expand into a /23 cleanly (claims 10.0.0.0/23)
+		_ = engCascade.Free("sub_block")
+
+		// Attempting to scale sub_a from a /24 to a /23 with reserve_sibling = true.
+		// The /23 expansion works, but the new /23 sibling wants 10.0.2.0/23, which is blocked by sub_clash!
+		err := engCascade.UpdateAllocation("sub_a", 23, true, StrategyFirst)
+		if err == nil {
+			t.Fatal("Expected error because the next-tier forward sibling block is occupied, but got nil")
+		}
+		expectedMsg := "is already occupied by allocation"
+		if !strings.Contains(err.Error(), expectedMsg) {
+			t.Errorf("Expected error message to contain %q, got: %v", expectedMsg, err)
+		}
+	})
+}
+

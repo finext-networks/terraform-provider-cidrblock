@@ -1,134 +1,103 @@
-# AWS VPC Subnet Example
-# Uses the cidrblock provider to allocate subnets for AWS VPC
+# AWS VPC Subnet Topology Example
+# Leverages the cidrblock provider to orchestrate deterministic VPC and subnet topologies
 
 terraform {
   required_providers {
     cidrblock = {
-      source  = "finext-networks/cidrblock"
+      source = "finext-networks/cidrblock"
     }
     aws = {
       source  = "hashicorp/aws"
+      version = "~> 5.0"
     }
   }
 }
 
 provider "aws" {
-  region = var.region
+  region = var.aws_region
 }
 
-# CIDR pool for VPC subnets
-resource "cidrblock_pool" "vpc_subnets" {
-  cidr         = "10.0.0.0/16"
-  organization = var.organization
-  project      = var.project_id
-  network      = "vpc-main"
+# Define the IPAM calculation pool for the AWS landing zone
+resource "cidrblock_pool" "aws_subnets" {
+  cidr                = "10.10.0.0/16"
+  organization        = var.organization
+  project             = var.project_id
+  network             = "vpc-primary"
+  allocation_strategy = "FIRST" # Keys evaluated alphabetically: app_tier, web_tier
 
   allocations = {
-    public_a = {
-      prefix_size     = 24
-      reserve_sibling = false
-    }
-
-    public_b = {
-      prefix_size     = 24
-      reserve_sibling = false
-    }
-
-    private_a = {
-      prefix_size     = 23
+    # 1. Processed First Alphabetically: Sized at /22, claims 10.10.0.0/22.
+    # Valid: Perfectly left-hand aligned relative to the tree radix structure.
+    # Spawns a sibling reservation at 10.10.4.0/22 to guarantee uncollided space for AzB apps.
+    app_tier = {
+      prefix_size     = 22
       reserve_sibling = true
     }
 
-    private_b = {
-      prefix_size     = 23
-      reserve_sibling = true
-    }
-
-    database = {
+    # 2. Processed Second: /24 sizing scans from the bottom of the pool.
+    # Skips app_tier + its sibling reservation space (10.10.0.0 to 10.10.7.255).
+    # Securely claims the next aligned block boundary at 10.10.8.0/24.
+    web_tier = {
       prefix_size     = 24
       reserve_sibling = false
     }
   }
 }
 
-# AWS VPC
+# Base AWS VPC Container Network
 resource "aws_vpc" "main" {
-  cidr_block           = "10.0.0.0/16"
+  cidr_block           = cidrblock_pool.aws_subnets.cidr
   enable_dns_hostnames = true
-  enable_dns_support   = true
 
   tags = {
-    Name        = "vpc-main"
-    Organization = var.organization
-    Project     = var.project_id
+    Name = "vpc-primary"
   }
 }
 
-# Public Subnet A
-resource "aws_subnet" "public_a" {
+# Active Application Subnet (Availability Zone A)
+resource "aws_subnet" "app_aza" {
   vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrblock_pool.vpc_subnets.allocations["public_a"].allocated_cidr
-  availability_zone = "${var.region}a"
+  cidr_block        = cidrblock_pool.aws_subnets.allocations["app_tier"].allocated_cidr
+  availability_zone = "${var.aws_region}a"
 
   tags = {
-    Name = "public-a"
+    Name = "app-tier-aza"
   }
 }
 
-# Public Subnet B
-resource "aws_subnet" "public_b" {
+# High-Availability Expansion Subnet (Availability Zone B)
+# Consumes the guaranteed uncollided forward sibling block calculated by the engine
+resource "aws_subnet" "app_azb" {
   vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrblock_pool.vpc_subnets.allocations["public_b"].allocated_cidr
-  availability_zone = "${var.region}b"
+  cidr_block        = cidrblock_pool.aws_subnets.allocations["app_tier"].sibling_cidr
+  availability_zone = "${var.aws_region}b"
 
   tags = {
-    Name = "public-b"
+    Name = "app-tier-azb-ha-expansion"
   }
 }
 
-# Private Subnet A
-resource "aws_subnet" "private_a" {
+# DMZ Public Web Subnet (Availability Zone A)
+resource "aws_subnet" "web_aza" {
   vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrblock_pool.vpc_subnets.allocations["private_a"].allocated_cidr
-  availability_zone = "${var.region}a"
+  cidr_block        = cidrblock_pool.aws_subnets.allocations["web_tier"].allocated_cidr
+  availability_zone = "${var.aws_region}a"
 
   tags = {
-    Name = "private-a"
+    Name = "web-tier-aza"
   }
 }
 
-# Private Subnet B
-resource "aws_subnet" "private_b" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrblock_pool.vpc_subnets.allocations["private_b"].allocated_cidr
-  availability_zone = "${var.region}b"
-
-  tags = {
-    Name = "private-b"
-  }
+output "vpc_id" {
+  value = aws_vpc.main.id
 }
 
-# Database Subnet
-resource "aws_subnet" "database" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrblock_pool.vpc_subnets.allocations["database"].allocated_cidr
-  availability_zone = "${var.region}a"
-
-  tags = {
-    Name = "database"
-  }
+output "app_aza_cidr" {
+  value = aws_subnet.app_aza.cidr_block
 }
 
-output "vpc_cidr" {
-  value = aws_vpc.main.cidr_block
+output "app_azb_reserved_sibling_cidr" {
+  value       = aws_subnet.app_azb.cidr_block
+  description = "Verified, left-hand aligned buddy sibling used for seamless multi-AZ clustering"
 }
 
-output "subnets" {
-  value = {
-    public_a  = cidrblock_pool.vpc_subnets.allocations["public_a"].allocated_cidr
-    public_b  = cidrblock_pool.vpc_subnets.allocations["public_b"].allocated_cidr
-    private_a = cidrblock_pool.vpc_subnets.allocations["private_a"].allocated_cidr
-    private_b = cidrblock_pool.vpc_subnets.allocations["private_b"].allocated_cidr
-    database  = cidrblock_pool.vpc_subnets.allocations["database"].allocated_cidr
-  }
-}

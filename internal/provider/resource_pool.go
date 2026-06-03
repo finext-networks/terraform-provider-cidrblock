@@ -268,21 +268,18 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		planAllocs = make(map[string]allocationModel)
 	}
 
-	// Re-register static allocations to prevent shifts across update evaluations
+	// Re-register ALL existing allocations into the engine so it can evaluate
+	// size/sibling expansions relative to the entire active topology footprint.
 	for k, v := range stateAllocs {
 		if v.AllocatedCIDR.IsNull() || v.AllocatedCIDR.IsUnknown() {
 			continue
 		}
-
-		planVal, existsInPlan := planAllocs[k]
-		if existsInPlan && planVal.PrefixSize.ValueInt64() == v.PrefixSize.ValueInt64() {
-			eng.RegisterExistingAllocation(k, &ipam.Allocation{
-				PrefixSize:     int(v.PrefixSize.ValueInt64()),
-				ReserveSibling: v.ReserveSibling.ValueBool(),
-				AllocatedCIDR:  v.AllocatedCIDR.ValueString(),
-				SiblingCIDR:    v.SiblingCIDR.ValueString(),
-			})
-		}
+		eng.RegisterExistingAllocation(k, &ipam.Allocation{
+			PrefixSize:     int(v.PrefixSize.ValueInt64()),
+			ReserveSibling: v.ReserveSibling.ValueBool(),
+			AllocatedCIDR:  v.AllocatedCIDR.ValueString(),
+			SiblingCIDR:    v.SiblingCIDR.ValueString(),
+		})
 	}
 
 	resultElements := make(map[string]attr.Value)
@@ -304,26 +301,25 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	for _, k := range keys {
 		v := planAllocs[k]
 
-		// Execute inline modification if the specific key token already exists
-		if existing, err := eng.GetAllocation(k); err == nil && int64(existing.PrefixSize) == v.PrefixSize.ValueInt64() {
-			if v.ReserveSibling.ValueBool() != existing.ReserveSibling {
-				err = eng.UpdateAllocation(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool(), strat)
-				if err != nil {
-					resp.Diagnostics.AddError("Sibling Reservation Modification Failed", err.Error())
-					return
-				}
-				existing, _ = eng.GetAllocation(k)
+		// If the key already exists in our active engine memory, route it
+		// through UpdateAllocation to safely handle size mutations and sibling changes.
+		if _, err := eng.GetAllocation(k); err == nil {
+			err = eng.UpdateAllocation(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool(), strat)
+			if err != nil {
+				resp.Diagnostics.AddError("Pool Allocation Update Failed", fmt.Sprintf("Key %s: %s", k, err.Error()))
+				return
 			}
 
+			updated, _ := eng.GetAllocation(k)
 			siblingVal := types.StringValue("")
-			if existing.SiblingCIDR != "" {
-				siblingVal = types.StringValue(existing.SiblingCIDR)
+			if updated.SiblingCIDR != "" {
+				siblingVal = types.StringValue(updated.SiblingCIDR)
 			}
 
 			objVal, diags := types.ObjectValue(allocObjectType.AttrTypes, map[string]attr.Value{
-				"prefix_size":     types.Int64Value(int64(existing.PrefixSize)),
-				"reserve_sibling": types.BoolValue(existing.ReserveSibling),
-				"allocated_cidr":  types.StringValue(existing.AllocatedCIDR),
+				"prefix_size":     types.Int64Value(int64(updated.PrefixSize)),
+				"reserve_sibling": types.BoolValue(updated.ReserveSibling),
+				"allocated_cidr":  types.StringValue(updated.AllocatedCIDR),
 				"sibling_cidr":    siblingVal,
 			})
 			resp.Diagnostics.Append(diags...)
@@ -331,7 +327,7 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 			continue
 		}
 
-		// Otherwise, process as a new subnet entry allocation step
+		// Otherwise, treat as a brand-new subnet addition
 		cidr, err := eng.Allocate(k, int(v.PrefixSize.ValueInt64()), v.ReserveSibling.ValueBool(), strat)
 		if err != nil {
 			resp.Diagnostics.AddError("Pool Allocation Failed", fmt.Sprintf("Key %s: %s", k, err.Error()))
@@ -354,7 +350,6 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		resultElements[k] = objVal
 	}
 
-	// Fix: Ensure null updates maintain correct structural configuration formatting
 	if plan.Allocations.IsNull() {
 		plan.Allocations = types.MapNull(allocObjectType)
 	} else {
