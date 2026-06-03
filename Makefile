@@ -15,6 +15,7 @@ build:
 ## install: Build and install the provider
 .PHONY: install
 install: build
+	mkdir -p "${HOME}/.terraform.d/plugins/registry.terraform.io/finext-networks/cidrblock/${VERSION}/${GOOS}_${GOARCH}"
 	install ${BINARY_NAME} "${HOME}/.terraform.d/plugins/registry.terraform.io/finext-networks/cidrblock/${VERSION}/${GOOS}_${GOARCH}/${BINARY_NAME}"
 
 ## fmt: Format Go code
@@ -54,8 +55,8 @@ generate:
 ## tools: Install development tools
 .PHONY: tools
 tools:
-	go install [github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest](https://github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest)
-	go install [github.com/golangci/golangci-lint/cmd/golangci-lint@latest](https://github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	go install github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 ## clean: Clean build artifacts and temporary testing environments
 .PHONY: clean
