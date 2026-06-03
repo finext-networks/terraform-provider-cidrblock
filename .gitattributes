@@ -1,0 +1,12 @@
+# Force identical cross-platform newline behavior for programming files
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+
+# Identify documentation assets
+*.md text eol=lf
+
+# Mark automatically generated test results and outputs as binary or text
+*.out text eol=lf
+*.html text
+

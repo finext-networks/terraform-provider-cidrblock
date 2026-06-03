@@ -1,0 +1,29 @@
+# {{ .Name }} (Data Source)
+
+{{ .Description }}
+
+## Example Usage
+
+{{ range $i, $ex := .Examples -}}
+{{ if $i -}}
+---
+{{ end -}}
+
+```terraform
+{{ $ex }}
+```
+
+{{ end -}}
+
+## Argument Reference
+
+{{- range .Arguments }}
+* **{{ .Name }}** - {{ .Description }}
+{{- end }}
+
+## Attribute Reference
+
+{{- range .Attributes }}
+* **{{ .Name }}** - {{ .Description }}
+{{- end }}
+
