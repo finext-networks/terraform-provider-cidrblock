@@ -44,7 +44,7 @@ test-e2e: build
 	@echo 'provider_installation { dev_overrides { "finext-networks/cidrblock" = "$(shell pwd)" } direct {} }' > .terraformrc
 	@echo "==> Running automated E2E integration test suites..."
 	@export TF_CLI_CONFIG_FILE=$(shell pwd)/.terraformrc; \
-	cd tests && terraform init -upgrade && terraform test
+	cd tests && terraform test
 
 ## generate: Generate documentation
 .PHONY: generate
@@ -54,8 +54,8 @@ generate:
 ## tools: Install development tools
 .PHONY: tools
 tools:
-	go install github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install [github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest](https://github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest)
+	go install [github.com/golangci/golangci-lint/cmd/golangci-lint@latest](https://github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
 
 ## clean: Clean build artifacts and temporary testing environments
 .PHONY: clean
