@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Automatically track and propose updates for Go module ecosystem packages
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+  # Automatically track updates for your GitHub Action workflow files
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+
