@@ -4,7 +4,7 @@
 terraform {
   required_providers {
     cidrblock = {
-      source  = "finext/cidrblock"
+      source  = "finext-networks/cidrblock"
     }
     google = {
       source  = "hashicorp/google"

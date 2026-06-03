@@ -1,7 +1,7 @@
-# Design and Implementation Plan: `finext/cidrblock` Terraform Provider
+# Design and Implementation Plan: `finext-networks/cidrblock` Terraform Provider
 
 ## 1. Architectural Overview
-The `finext/cidrblock` provider is a stateless-to-stateful bridge for IP Address Management (IPAM) in Terraform. It operates as a purely logical provider—it makes no external API calls to cloud vendors. Instead, it uses rigorous CIDR mathematics and Terraform's native `.tfstate` file to track, allocate, and recycle subnets from a defined supernet pool.
+The `finext-networks/cidrblock` provider is a stateless-to-stateful bridge for IP Address Management (IPAM) in Terraform. It operates as a purely logical provider—it makes no external API calls to cloud vendors. Instead, it uses rigorous CIDR mathematics and Terraform's native `.tfstate` file to track, allocate, and recycle subnets from a defined supernet pool.
 
 It is designed to be cloud-agnostic but utilizes standard GCP hierarchical terminology (`organization`, `project`, `network`) for its isolation boundaries.
 
@@ -54,7 +54,7 @@ This section dictates the sequential workflow for an AI agent or developer to bu
 5. **TDD:** Write Go `*_test.go` files *before* implementing the core logic.
 
 ### Phase 1: Repository Scaffolding & Setup
-- [x] **Step 1:** Initialize a new Go module: `go mod init github.com/finext/terraform-provider-cidrblock`.
+- [x] **Step 1:** Initialize a new Go module: `go mod init github.com/finext-networks/terraform-provider-cidrblock`.
 - [x] **Step 2:** Pull in the required HashiCorp framework dependencies: `go get github.com/hashicorp/terraform-plugin-framework`.
 - [x] **Step 3:** Setup standard boilerplate: `main.go`, `provider/provider.go`.
 - [x] **Step 4:** Configure `.gitignore`, `Makefile`, and `.golangci.yml` for linting.

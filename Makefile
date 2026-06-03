@@ -15,7 +15,7 @@ build:
 ## install: Build and install the provider
 .PHONY: install
 install: build
-	install ${BINARY_NAME} "${HOME}/.terraform.d/plugins/registry.terraform.io/finext/cidrblock/${VERSION}/${GOOS}_${GOARCH}/${BINARY_NAME}"
+	install ${BINARY_NAME} "${HOME}/.terraform.d/plugins/registry.terraform.io/finext-networks/cidrblock/${VERSION}/${GOOS}_${GOARCH}/${BINARY_NAME}"
 
 ## fmt: Format Go code
 .PHONY: fmt

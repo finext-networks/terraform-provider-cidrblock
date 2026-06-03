@@ -1,4 +1,4 @@
-#cidrblock_pool (Resource)
+# cidrblock_pool (`Resource`)
 
 Manages an atomic IP address prefix pool allocation layout grid. This resource operates as a stateless calculation engine using continuous boundary mapping to compute and track allocated CIDR blocks without an external database back-end.
 

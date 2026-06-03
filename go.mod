@@ -1,4 +1,4 @@
-module github.com/finext/terraform-provider-cidrblock
+module github.com/finext-networks/terraform-provider-cidrblock
 
 go 1.25.8
 

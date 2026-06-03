@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/finext/terraform-provider-cidrblock/internal/ipam"
+	"github.com/finext-networks/terraform-provider-cidrblock/internal/ipam"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"

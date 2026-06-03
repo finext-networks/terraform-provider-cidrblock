@@ -9,7 +9,7 @@ import (
 	"flag"
 	"log"
 
-	"github.com/finext/terraform-provider-cidrblock/internal/provider"
+	"github.com/finext-networks/terraform-provider-cidrblock/internal/provider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 )
 
@@ -32,7 +32,7 @@ func main() {
 
 	// Fix: Removed the '&' to instantiate as a value type instead of a reference pointer
 	opts := providerserver.ServeOpts{
-		Address: "registry.terraform.io/finext/cidrblock",
+		Address: "registry.terraform.io/finext-networks/cidrblock",
 		Debug:   debug,
 	}
 

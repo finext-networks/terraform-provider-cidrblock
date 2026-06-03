@@ -7,7 +7,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/finext/terraform-provider-cidrblock/internal/ipam"
+	"github.com/finext-networks/terraform-provider-cidrblock/internal/ipam"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
