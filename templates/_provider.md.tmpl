@@ -55,13 +55,13 @@ output "subnet_a" {
 
 - `cidrblock_pool` -- Reads a pool's state, showing allocations and metrics
 
-{{- range template .Resources }}
+{{- range .Resources }}
   {{- if ne .Name "cidrblock_pool" }}
 - [`{{.Name}}`](../resources/{{.Name}}.md)
   {{- end }}
 {{- end }}
 
-{{- range template .DataSources }}
+{{- range .DataSources }}
   {{- if ne .Name "cidrblock_pool" }}
 - [`{{.Name}}`](../data-sources/{{.Name}}.md)
   {{- end }}

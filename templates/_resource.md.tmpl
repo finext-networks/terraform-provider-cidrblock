@@ -1,6 +1,6 @@
-# {{ .Name }} - {{ .Description | cleancomment }}
+# {{ .Name }} (Resource)
 
-{{ .Description | markdown }}
+{{ .Description }}
 
 ## Example Usage
 
@@ -17,16 +17,13 @@
 
 ## Argument Reference
 
-{{- range template .Arguments }}
-  {{- if or (and .Required (eq .Type "Input")) (and .Optional (eq .Type "Input")) (and .Computed (eq .Type "Input")) )}}
-* **{{ .Name }}** - {{ .Description | markdown }} ({{ .Type | capitalize }})
-  {{- end }}
+{{- range .Arguments }}
+* **{{ .Name }}** - {{ .Description }}
 {{- end }}
 
 ## Attribute Reference
 
-{{- range template .Attributes }}
-  {{- if and .Computed (eq .Type "Output") }}
-* **{{ .Name }}** - {{ .Description | markdown }}
-  {{- end }}
+{{- range .Attributes }}
+* **{{ .Name }}** - {{ .Description }}
 {{- end }}
+

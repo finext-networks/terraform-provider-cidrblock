@@ -13,6 +13,13 @@ terraform {
   }
 }
 
+# Provider configuration implementing production safety guardrails
+provider "cidrblock" {
+  # Safety Guardrail: Explicitly blocks any terraform apply passes that attempt
+  # to delete active subnet keys from an existing pool resource.
+  prevent_subnet_destruction = true
+}
+
 provider "aws" {
   region = var.aws_region
 }
@@ -23,20 +30,22 @@ resource "cidrblock_pool" "aws_subnets" {
   organization        = var.organization
   project             = var.project_id
   network             = "vpc-primary"
-  allocation_strategy = "FIRST" # Keys evaluated alphabetically: app_tier, web_tier
+  allocation_strategy = "FIRST"
 
   allocations = {
-    # 1. Processed First Alphabetically: Sized at /22, claims 10.10.0.0/22.
-    # Valid: Perfectly left-hand aligned relative to the tree radix structure.
-    # Spawns a sibling reservation at 10.10.4.0/22 to guarantee uncollided space for AzB apps.
+    # PASS 1: Evaluated First due to FFD Size Sorting (Largest footprint: /22).
+    # Claims the lowest naturally aligned free gap at 10.10.0.0/22.
+    # Spawns a left-hand aligned buddy reservation at 10.10.4.0/22 for AzB expansion.
+    # Total combined footprint consumed: 10.10.0.0 to 10.10.7.255
     app_tier = {
       prefix_size     = 22
       reserve_sibling = true
     }
 
-    # 2. Processed Second: /24 sizing scans from the bottom of the pool.
-    # Skips app_tier + its sibling reservation space (10.10.0.0 to 10.10.7.255).
-    # Securely claims the next aligned block boundary at 10.10.8.0/24.
+    # PASS 2: Evaluated Second due to FFD Size Sorting (Smaller footprint: /24).
+    # Scans from the bottom of the pool, skipping past the active app_tier 
+    # and its locked buddy block space.
+    # Securely claims the next available aligned block boundary at 10.10.8.0/24.
     web_tier = {
       prefix_size     = 24
       reserve_sibling = false
@@ -88,6 +97,10 @@ resource "aws_subnet" "web_aza" {
   }
 }
 
+# ==========================================
+# Topology Outputs
+# ==========================================
+
 output "vpc_id" {
   value = aws_vpc.main.id
 }
@@ -99,5 +112,10 @@ output "app_aza_cidr" {
 output "app_azb_reserved_sibling_cidr" {
   value       = aws_subnet.app_azb.cidr_block
   description = "Verified, left-hand aligned buddy sibling used for seamless multi-AZ clustering"
+}
+
+output "web_aza_cidr" {
+  value       = aws_subnet.web_aza.cidr_block
+  description = "Calculated CIDR block for public web tier"
 }
 
