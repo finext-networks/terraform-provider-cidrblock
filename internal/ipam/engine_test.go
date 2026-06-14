@@ -643,7 +643,7 @@ func TestEngine_IPv6CanonicalEquivalence(t *testing.T) {
 				t.Fatalf("Failed allocation on compressed format: %v", err)
 			}
 
-			// Ensure that regardless of pool format layout inputs, 
+			// Ensure that regardless of pool format layout inputs,
 			// the stored string key resolves to the exact same canonical netip output string
 			state := eng.GetState()
 			alloc := state["subnet_compressed"]
@@ -769,7 +769,7 @@ func TestEngine_ExtremePrefixSiblingMath(t *testing.T) {
 	if alloc31 != "10.0.0.4/31" {
 		t.Errorf("Expected /31 link to skip reservation gaps and land on .4/31, got %s", alloc31)
 	}
-	
+
 	state = eng.GetState()
 	if state["p2p_link"].SiblingCIDR != "10.0.0.6/31" {
 		t.Errorf("Expected /31 forward sibling to be .6/31, got %s", state["p2p_link"].SiblingCIDR)
@@ -798,7 +798,7 @@ func TestEngine_IPv6ExtremePrefixSiblingMath(t *testing.T) {
 }
 
 // TestEngine_PanicRegression_ZeroPrefixSibling ensures that requesting a sibling reservation
-// on a zero-width prefix size (/0) safely yields a validation error instead of triggering a 
+// on a zero-width prefix size (/0) safely yields a validation error instead of triggering a
 // runtime panic due to bit-length underflow (0 - 1 = -1) inside the netip standard library.
 func TestEngine_PanicRegression_ZeroPrefixSibling(t *testing.T) {
 	// Replicate the exact failing baseline environment uncovered by the fuzz worker seed
@@ -811,7 +811,7 @@ func TestEngine_PanicRegression_ZeroPrefixSibling(t *testing.T) {
 		}
 	}
 
-	// Establish a localized panic recovery trap to explicitly fail the test 
+	// Establish a localized panic recovery trap to explicitly fail the test
 	// if a regression causes the netip library or search loop to crash.
 	defer func() {
 		if r := recover(); r != nil {
@@ -826,7 +826,7 @@ func TestEngine_PanicRegression_ZeroPrefixSibling(t *testing.T) {
 	}
 }
 
-// TestEngine_FuzzRegression_BitShiftOverflow checks that zero-length prefixes 
+// TestEngine_FuzzRegression_BitShiftOverflow checks that zero-length prefixes
 // or maximum boundary widths do not trigger CPU shift-masking infinite loops.
 func TestEngine_FuzzRegression_BitShiftOverflow(t *testing.T) {
 	// 1. Check an internet-scale root boundary pool layout
@@ -861,7 +861,7 @@ func TestEngine_FuzzRegression_BitShiftOverflow(t *testing.T) {
 }
 
 // TestEngine_FuzzRegression_ZeroPrefixSiblingPanic ensures that requesting a sibling reservation
-// on a zero-width prefix size (/0) yields a validation error instead of triggering a 
+// on a zero-width prefix size (/0) yields a validation error instead of triggering a
 // runtime panic due to bit-length underflow (0 - 1 = -1) inside the netip standard library.
 func TestEngine_FuzzRegression_ZeroPrefixSiblingPanic(t *testing.T) {
 	eng, err := NewEngine("0.0.0.0/0")
@@ -884,7 +884,7 @@ func TestEngine_FuzzRegression_ZeroPrefixSiblingPanic(t *testing.T) {
 	}
 }
 
-// TestEngine_FuzzRegression_AlgorithmicHangWidePool preserves execution speed for wide 
+// TestEngine_FuzzRegression_AlgorithmicHangWidePool preserves execution speed for wide
 // pools using alternative strategies, preventing exponential brute-force scanning timeouts.
 func TestEngine_FuzzRegression_AlgorithmicHangWidePool(t *testing.T) {
 	eng, err := NewEngine("2001:db8::/48")
@@ -904,8 +904,8 @@ func TestEngine_FuzzRegression_AlgorithmicHangWidePool(t *testing.T) {
 	}
 }
 
-// TestEngine_FuzzRegression_CrossSliceOverlap ensures that when a candidate block fits 
-// inside an unallocated slice but spans across its upper boundary, it runs an explicit 
+// TestEngine_FuzzRegression_CrossSliceOverlap ensures that when a candidate block fits
+// inside an unallocated slice but spans across its upper boundary, it runs an explicit
 // collision verification to avoid bleeding into adjacent active allocations.
 func TestEngine_FuzzRegression_CrossSliceOverlap(t *testing.T) {
 	eng, err := NewEngine("10.0.0.0/24")
@@ -918,7 +918,7 @@ func TestEngine_FuzzRegression_CrossSliceOverlap(t *testing.T) {
 	eng.RegisterExistingAllocation("block_1", &Allocation{PrefixSize: 27, AllocatedCIDR: "10.0.0.32/27"})
 	eng.RegisterExistingAllocation("block_2", &Allocation{PrefixSize: 27, AllocatedCIDR: "10.0.0.64/27"})
 
-	// Request a /26 allocation (requires 64 addresses). 
+	// Request a /26 allocation (requires 64 addresses).
 	// The first available slice gap starts at 10.0.0.0 but only has a size capacity of 32 hosts.
 	// The engine must not erroneously allocate 10.0.0.0/26 (which would bleed into block_1).
 	// It must leap directly past the busy block cluster to find the first valid gap at 10.0.0.128/26.
@@ -933,7 +933,7 @@ func TestEngine_FuzzRegression_CrossSliceOverlap(t *testing.T) {
 }
 
 // TestEngine_Matrix_AllStrategiesHappyPath loops through every single allocation strategy
-// using identical inputs to verify that all three algorithms safely pass core lifecycle 
+// using identical inputs to verify that all three algorithms safely pass core lifecycle
 // invariants, allocation rules, and metric evaluations while respecting their unique layout patterns.
 func TestEngine_Matrix_AllStrategiesHappyPath(t *testing.T) {
 	strategies := []Strategy{StrategyFirst, StrategyBest, StrategySparse}
@@ -946,9 +946,9 @@ func TestEngine_Matrix_AllStrategiesHappyPath(t *testing.T) {
 				t.Fatalf("Failed to initialize engine: %v", err)
 			}
 
-			// 2. Allocate our target block first. In an empty pool, this is guaranteed 
+			// 2. Allocate our target block first. In an empty pool, this is guaranteed
 			// to land on 10.0.0.0/26 across all strategies, giving us a valid Left-Hand anchor.
-			addr1, err := eng.Allocate("subnet_1", 26, false, strat) 
+			addr1, err := eng.Allocate("subnet_1", 26, false, strat)
 			if err != nil {
 				t.Fatalf("Allocation 1 failed under strategy %s: %v", strat, err)
 			}
@@ -991,7 +991,7 @@ func TestEngine_Matrix_AllStrategiesHappyPath(t *testing.T) {
 	}
 }
 
-// TestEngine_CoverageCompletion_ErrorPaths executes the remaining unreached defensive 
+// TestEngine_CoverageCompletion_ErrorPaths executes the remaining unreached defensive
 // error guard rails inside the UpdateAllocation lifecycle.
 func TestEngine_CoverageCompletion_ErrorPaths(t *testing.T) {
 	eng, _ := NewEngine("10.0.0.0/24")
@@ -1016,7 +1016,7 @@ func TestEngine_CoverageCompletion_ErrorPaths(t *testing.T) {
 	}
 }
 
-// TestEngine_CoverageCompletion_SiblingOverlaps triggers the specific loop lines 
+// TestEngine_CoverageCompletion_SiblingOverlaps triggers the specific loop lines
 // evaluating candidate blocks colliding directly with existing forward sibling reservations.
 func TestEngine_CoverageCompletion_SiblingOverlaps(t *testing.T) {
 	eng, _ := NewEngine("10.0.0.0/24")
@@ -1032,15 +1032,15 @@ func TestEngine_CoverageCompletion_SiblingOverlaps(t *testing.T) {
 	// Force AvailableSlices collision loop to evaluate a sibling block overlap
 	_ = eng.AvailableSlices()
 
-	// Try to allocate a new block with its own sibling reservation that would 
+	// Try to allocate a new block with its own sibling reservation that would
 	// overlap with block_a's existing sibling reservation space
 	eng.RegisterExistingAllocation("block_b", &Allocation{PrefixSize: 28, AllocatedCIDR: "10.0.0.32/28"})
-	
+
 	// Triggers cross-sibling validation checks inside findGap
 	_, _ = eng.Allocate("block_c", 28, true, StrategyFirst)
 }
 
-// TestEngine_CoverageCompletion_SortingTieBreakers executes the address comparison lines 
+// TestEngine_CoverageCompletion_SortingTieBreakers executes the address comparison lines
 // when two available slice gaps evaluate to the exact same size metric.
 func TestEngine_CoverageCompletion_SortingTieBreakers(t *testing.T) {
 	eng, _ := NewEngine("10.0.0.0/24")
@@ -1050,7 +1050,7 @@ func TestEngine_CoverageCompletion_SortingTieBreakers(t *testing.T) {
 
 	// Force BEST and SPARSE sorting routines to evaluate equal slice size tie-breakers
 	_, _ = eng.Allocate("best_tie", 28, false, StrategyBest)
-	
+
 	eng2, _ := NewEngine("10.0.0.0/24")
 	eng2.RegisterExistingAllocation("mid_block", &Allocation{PrefixSize: 25, AllocatedCIDR: "10.0.0.128/25"})
 	_, _ = eng2.Allocate("sparse_tie", 28, false, StrategySparse)
@@ -1076,7 +1076,7 @@ func TestEngine_CoverageCompletion_LowLevelGuards(t *testing.T) {
 	}
 }
 
-// TestEngine_Coverage_SiblingCollisions validates search loops reacting directly 
+// TestEngine_Coverage_SiblingCollisions validates search loops reacting directly
 // to candidate blocks overlapping with active forward sibling reservations.
 func TestEngine_Coverage_SiblingCollisions(t *testing.T) {
 	eng, _ := NewEngine("10.0.0.0/24")
@@ -1097,7 +1097,7 @@ func TestEngine_Coverage_SiblingCollisions(t *testing.T) {
 	_, _ = eng.Allocate("block_c", 28, true, StrategyFirst)
 }
 
-// TestEngine_Coverage_SortingTieBreakers executes the address-less evaluation lines 
+// TestEngine_Coverage_SortingTieBreakers executes the address-less evaluation lines
 // when two available slice gaps have matching size metrics.
 func TestEngine_Coverage_SortingTieBreakers(t *testing.T) {
 	// Create two identical isolated free gaps by dropping a block exactly in the center
@@ -1110,7 +1110,7 @@ func TestEngine_Coverage_SortingTieBreakers(t *testing.T) {
 	_, _ = engSparse.Allocate("sparse_tie", 28, false, StrategySparse)
 }
 
-// TestEngine_Coverage_UpdateAllocationFailure forces an error return path when 
+// TestEngine_Coverage_UpdateAllocationFailure forces an error return path when
 // an update reallocation cannot find a matching free slot.
 func TestEngine_Coverage_UpdateAllocationFailure(t *testing.T) {
 	eng, _ := NewEngine("10.0.0.0/28") // Tiny pool
@@ -1153,8 +1153,8 @@ func TestEngine_Coverage_DefensiveAndSortingGaps(t *testing.T) {
 	// 3. Trigger SiblingCIDR collision check inside findGap loop
 	engSib, _ := NewEngine("10.0.0.0/24")
 	engSib.RegisterExistingAllocation("k3", &Allocation{
-		PrefixSize:    28, 
-		AllocatedCIDR: "10.0.0.32/28", 
+		PrefixSize:    28,
+		AllocatedCIDR: "10.0.0.32/28",
 		SiblingCIDR:   "10.0.0.0/28",
 	})
 	// Allocation search evaluates .0/28 first, hitting the existing sibling reservation match
@@ -1177,7 +1177,7 @@ func TestEngine_Coverage_DefensiveAndSortingGaps(t *testing.T) {
 	engTie, _ := NewEngine("10.0.0.0/24")
 	engTie.RegisterExistingAllocation("divider", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.64/26"})
 	_, _ = engTie.Allocate("best_tie", 28, false, StrategyBest)
-	
+
 	engTie2, _ := NewEngine("10.0.0.0/24")
 	engTie2.RegisterExistingAllocation("divider", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.64/26"})
 	_, _ = engTie2.Allocate("sparse_tie", 28, false, StrategySparse)
@@ -1232,16 +1232,16 @@ func TestEngine_UpdateAllocation_HardenedInvariants(t *testing.T) {
 
 	// Pre-seed the pool with distinct topologies to test collision and alignment rules
 	// Left-hand aligned block at the start of the lower half
-	_, _ = eng.Allocate("subnet_left", 26, false, StrategyFirst)   // Claims 10.0.0.0/26
+	_, _ = eng.Allocate("subnet_left", 26, false, StrategyFirst) // Claims 10.0.0.0/26
 
 	// Right-hand aligned block filling the upper half of that same tier
-	_, _ = eng.Allocate("subnet_right", 26, false, StrategyFirst)  // Claims 10.0.0.64/26
+	_, _ = eng.Allocate("subnet_right", 26, false, StrategyFirst) // Claims 10.0.0.64/26
 
 	// Independent block sitting out-of-band in the second half of the pool
 	_, _ = eng.Allocate("subnet_blocker", 26, false, StrategyFirst) // Claims 10.0.0.128/26
 
 	t.Run("Gate 1: Enforce Base-Address Immutability", func(t *testing.T) {
-		// Attempting to scale up the right-hand block (10.0.0.64/26) to a /25 requires 
+		// Attempting to scale up the right-hand block (10.0.0.64/26) to a /25 requires
 		// shifting the base address backward to 10.0.0.0. The engine must reject this.
 		err := eng.UpdateAllocation("subnet_right", 25, false, StrategyFirst)
 		if err == nil {
@@ -1296,10 +1296,10 @@ func TestEngine_UpdateAllocation_HardenedInvariants(t *testing.T) {
 
 	t.Run("Gate 5: Detect Next-Block Sibling Claims During Upgrades", func(t *testing.T) {
 		engCascade, _ := NewEngine("10.0.0.0/22") // Massive pool to remove boundary limits
-		
+
 		// Setup a clean left-hand block
 		_, _ = engCascade.Allocate("sub_a", 24, false, StrategyFirst) // Claims 10.0.0.0/24
-		
+
 		// Drop a blocker right where sub_a's NEXT-TIER sibling would want to be (10.0.1.0/24 is fine, 10.0.2.0/23 is next)
 		_, _ = engCascade.Allocate("sub_block", 24, false, StrategyFirst) // Claims 10.0.1.0/24
 		_, _ = engCascade.Allocate("sub_clash", 24, false, StrategyFirst) // Claims 10.0.2.0/24 (This blocks a /23 sibling!)
@@ -1324,7 +1324,7 @@ func TestEngine_UpdateAllocation_DeepCoverageCompletion(t *testing.T) {
 	t.Run("Invalidation 4: Right-Hand Block At New Size Tier", func(t *testing.T) {
 		eng, _ := NewEngine("10.0.0.0/24")
 		eng.RegisterExistingAllocation("target", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.128/26"})
-		
+
 		// Upgrading size to /25 is binary-aligned, but 10.0.0.128/25 is a right-hand block of 10.0.0.0/24.
 		// Activating a sibling reservation on it must fail validation.
 		err := eng.UpdateAllocation("target", 25, true, StrategyFirst)
@@ -1336,8 +1336,8 @@ func TestEngine_UpdateAllocation_DeepCoverageCompletion(t *testing.T) {
 	t.Run("Invalidation 5: Sibling Out Of Pool Bounds During Upgrade", func(t *testing.T) {
 		eng, _ := NewEngine("10.0.0.0/24")
 		eng.RegisterExistingAllocation("target", &Allocation{PrefixSize: 25, AllocatedCIDR: "10.0.0.0/25"})
-		
-		// Upgrading size to /24 expands the block to fill the entire pool. 
+
+		// Upgrading size to /24 expands the block to fill the entire pool.
 		// If reserve_sibling=true, the calculated sibling is 10.0.1.0/24, which falls out of pool boundaries.
 		err := eng.UpdateAllocation("target", 24, true, StrategyFirst)
 		if err == nil || !strings.Contains(err.Error(), "falls outside the master pool boundaries") {
@@ -1349,7 +1349,7 @@ func TestEngine_UpdateAllocation_DeepCoverageCompletion(t *testing.T) {
 		eng, _ := NewEngine("10.0.0.0/24")
 		eng.RegisterExistingAllocation("blocker", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.128/26", SiblingCIDR: "10.0.0.64/26"})
 		eng.RegisterExistingAllocation("target", &Allocation{PrefixSize: 27, AllocatedCIDR: "10.0.0.0/27"})
-		
+
 		// Upgrading target to /26 with a sibling places its sibling at 10.0.0.64/26, colliding with blocker's sibling.
 		err := eng.UpdateAllocation("target", 26, true, StrategyFirst)
 		if err == nil || !strings.Contains(err.Error(), "is already reserved as a sibling") {
@@ -1361,7 +1361,7 @@ func TestEngine_UpdateAllocation_DeepCoverageCompletion(t *testing.T) {
 		eng, _ := NewEngine("10.0.0.0/24")
 		eng.RegisterExistingAllocation("blocker", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.64/26"})
 		eng.RegisterExistingAllocation("target", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.0/26", ReserveSibling: false})
-		
+
 		// Turning on a sibling for target points directly to 10.0.0.64/26, which is occupied by blocker's primary allocation.
 		err := eng.UpdateAllocation("target", 26, true, StrategyFirst)
 		if err == nil || !strings.Contains(err.Error(), "is already occupied by") {
@@ -1373,7 +1373,7 @@ func TestEngine_UpdateAllocation_DeepCoverageCompletion(t *testing.T) {
 		eng, _ := NewEngine("10.0.0.0/24")
 		eng.RegisterExistingAllocation("blocker", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.128/26", SiblingCIDR: "10.0.0.64/26"})
 		eng.RegisterExistingAllocation("target", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.0/26", ReserveSibling: false})
-		
+
 		// Turning on a sibling for target points to 10.0.0.64/26, which is already claimed by blocker's sibling reservation.
 		err := eng.UpdateAllocation("target", 26, true, StrategyFirst)
 		if err == nil || !strings.Contains(err.Error(), "is already reserved by") {
@@ -1384,7 +1384,7 @@ func TestEngine_UpdateAllocation_DeepCoverageCompletion(t *testing.T) {
 	t.Run("AvailableSlices Internal Sibling Evaluation Scan", func(t *testing.T) {
 		eng, _ := NewEngine("10.0.0.0/24")
 		eng.RegisterExistingAllocation("k1", &Allocation{PrefixSize: 26, AllocatedCIDR: "10.0.0.128/26", SiblingCIDR: "10.0.0.0/26"})
-		
+
 		// Forces the overlap condition checker to evaluate an active sibling reservation while parsing available empty segments.
 		slices := eng.AvailableSlices()
 		if len(slices) == 0 {
@@ -1405,7 +1405,7 @@ func TestEngine_Coverage_MeticulousEdgeGaps(t *testing.T) {
 			PrefixSize:    28,
 			AllocatedCIDR: "10.0.0.0/28",
 		})
-		
+
 		// Expanding target to /26 covers 10.0.0.0 - 10.0.0.63, which clips blocker's sibling (10.0.0.32/27)
 		err := eng.UpdateAllocation("target", 26, false, StrategyFirst)
 		if err == nil || !strings.Contains(err.Error(), "overlaps with reserved sibling of") {
@@ -1415,14 +1415,14 @@ func TestEngine_Coverage_MeticulousEdgeGaps(t *testing.T) {
 
 	t.Run("Line 268: Static sibling toggle out of pool boundaries", func(t *testing.T) {
 		eng, _ := NewEngine("10.0.0.0/24")
-		// Register a block that fills the entire pool. It is left-hand aligned relative to its parent 
+		// Register a block that fills the entire pool. It is left-hand aligned relative to its parent
 		// bit structure (/24 inside a /23 parent tree space), bypassing the right-hand gate.
 		eng.RegisterExistingAllocation("edge_block", &Allocation{
 			PrefixSize:     24,
 			AllocatedCIDR:  "10.0.0.0/24",
 			ReserveSibling: false,
 		})
-		
+
 		// Toggling sibling to true tries to reserve 10.0.1.0/24, which breaks pool container limits
 		err := eng.UpdateAllocation("edge_block", 24, true, StrategyFirst)
 		if err == nil || !strings.Contains(err.Error(), "companion block is out of pool boundaries") {
@@ -1437,7 +1437,7 @@ func TestEngine_Coverage_MeticulousEdgeGaps(t *testing.T) {
 			AllocatedCIDR: "10.0.0.128/28",
 			SiblingCIDR:   "10.0.0.0/28",
 		})
-		
+
 		// Allocation search loops must intercept the collision at .0/28 and leap past it
 		cidr, err := eng.Allocate("new_alloc", 28, false, StrategyFirst)
 		if err != nil {
@@ -1455,7 +1455,7 @@ func TestEngine_Coverage_MeticulousEdgeGaps(t *testing.T) {
 			AllocatedCIDR: "10.0.0.128/28",
 			SiblingCIDR:   "10.0.0.16/28",
 		})
-		
+
 		// Allocating at 10.0.0.0/28 with reserveSibling=true sets its sibling to .16/28,
 		// which collides with blocker's sibling. The gap finder must cleanly skip this.
 		_, err := eng.Allocate("new_paired_alloc", 28, true, StrategyFirst)
@@ -1467,8 +1467,8 @@ func TestEngine_Coverage_MeticulousEdgeGaps(t *testing.T) {
 
 func TestEngine_FindGap_SiblingOverlapCoverage(t *testing.T) {
 	eng, _ := NewEngine("10.0.0.0/24")
-	
-	// Pre-seed an allocation that holds a sibling reservation exactly where a new allocation 
+
+	// Pre-seed an allocation that holds a sibling reservation exactly where a new allocation
 	// would naturally want to land, forcing the gap finder to scan past it.
 	eng.RegisterExistingAllocation("holder", &Allocation{
 		PrefixSize:    28,
@@ -1489,7 +1489,7 @@ func TestEngine_FindGap_LinearScanLeapOptimization(t *testing.T) {
 		eng, _ := NewEngine("10.0.0.0/8")
 
 		// Pre-allocate a large continuous blocking footprint at the very beginning of the pool.
-		// A /16 block consumes 65,536 individual IP addresses. 
+		// A /16 block consumes 65,536 individual IP addresses.
 		// Previously, a /32 micro-subnet request would attempt to step through this entire block address-by-address.
 		_, err := eng.Allocate("massive_block", 16, false, StrategyFirst)
 		if err != nil {
@@ -1510,4 +1510,3 @@ func TestEngine_FindGap_LinearScanLeapOptimization(t *testing.T) {
 		}
 	})
 }
-

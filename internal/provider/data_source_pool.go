@@ -198,11 +198,10 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		"allocated_cidr":  types.StringType,
 		"sibling_cidr":    types.StringType,
 	}
-	
+
 	mapVal, diags := types.MapValue(types.ObjectType{AttrTypes: allocTypes}, map[string]attr.Value{})
 	resp.Diagnostics.Append(diags...)
 	data.Allocations = mapVal
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
-
