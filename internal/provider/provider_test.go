@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp and Contributors. All rights reserved.
+// Copyright (c) Finext Networks. All rights reserved.
 // SPDX-License-Identifier: MPL-2.0
 
 package provider
@@ -27,14 +27,14 @@ func TestAccPoolResource_Basic(t *testing.T) {
 			// Create and Read testing
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_b = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_b = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "id", "test-org:test-project:test-network:10.0.0.0/24"),
@@ -65,14 +65,14 @@ func TestAccPoolResource_AddAllocation(t *testing.T) {
 			// Create with 2 allocations
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_b = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_b = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
@@ -82,18 +82,18 @@ func TestAccPoolResource_AddAllocation(t *testing.T) {
 			// Add a 3rd allocation
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_b = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_c = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_b = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_c = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_c.allocated_cidr", "10.0.0.32/28"),
@@ -111,18 +111,18 @@ func TestAccPoolResource_RemoveAllocation(t *testing.T) {
 			// Create with 3 allocations
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_b = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_c = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_b = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_c = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
@@ -133,14 +133,14 @@ func TestAccPoolResource_RemoveAllocation(t *testing.T) {
 			// Remove the 2nd allocation
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_c = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_c = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
@@ -159,23 +159,24 @@ func TestAccPoolResource_ReserveSibling(t *testing.T) {
 			// Create with reserve_sibling = false
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
-					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.sibling_cidr", ""),
+					// Assert the sibling_cidr attribute is completely null/absent from state mapping
+					resource.TestCheckNoResourceAttr("cidrblock_pool.test", "allocations.subnet_a.sibling_cidr"),
 				),
 			},
 			// Toggle reserve_sibling to true
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = true
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = true
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
@@ -185,14 +186,15 @@ func TestAccPoolResource_ReserveSibling(t *testing.T) {
 			// Toggle reserve_sibling back to false
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
-					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.sibling_cidr", ""),
+					// Assert the sibling_cidr attribute transitions back to clean null absence
+					resource.TestCheckNoResourceAttr("cidrblock_pool.test", "allocations.subnet_a.sibling_cidr"),
 				),
 			},
 		},
@@ -207,18 +209,18 @@ func TestAccPoolResource_GapFilling(t *testing.T) {
 			// Create with 3 allocations
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_b = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_c = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_b = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_c = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
@@ -229,14 +231,14 @@ func TestAccPoolResource_GapFilling(t *testing.T) {
 			// Remove middle allocation
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_c = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_c = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
@@ -246,18 +248,18 @@ func TestAccPoolResource_GapFilling(t *testing.T) {
 			// Add new allocation - should fill the gap
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_d = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_c = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_d = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_c = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
@@ -276,14 +278,14 @@ func TestAccPoolResource_IPv6(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: testAccPoolResourceConfig("2001:db8::/48", `
-					v6_subnet_a = {
-						prefix_size     = 64
-						reserve_sibling = false
-					}
-					v6_subnet_b = {
-						prefix_size     = 64
-						reserve_sibling = false
-					}
+						v6_subnet_a = {
+								prefix_size     = 64
+								reserve_sibling = false
+						}
+						v6_subnet_b = {
+								prefix_size     = 64
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "cidr", "2001:db8::/48"),
@@ -303,24 +305,24 @@ func TestAccDataSource_Basic(t *testing.T) {
 			// Create a pool resource first
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 			},
 			// Read the pool via data source
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`) + `
-					data "cidrblock_pool" "test" {
-						id   = "test-org:test-project:test-network"
-						cidr = "10.0.0.0/24"
-					}
+						data "cidrblock_pool" "test" {
+								id   = "test-org:test-project:test-network"
+								cidr = "10.0.0.0/24"
+						}
 				`,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("data.cidrblock_pool.test", "id", "test-org:test-project:test-network"),
@@ -360,14 +362,14 @@ func TestAccPoolResource_AlgorithmicBestFit(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: testAccPoolResourceConfigWithStrategy("10.0.0.0/24", "BEST", `
-					subnet_large_block = {
-						prefix_size     = 26
-						reserve_sibling = false
-					}
-					subnet_small_fragment = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_large_block = {
+								prefix_size     = 26
+								reserve_sibling = false
+						}
+						subnet_small_fragment = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_large_block.allocated_cidr", "10.0.0.0/26"),
@@ -387,10 +389,10 @@ func TestAccPoolResource_StrategyInPlaceMutation(t *testing.T) {
 			// Step 1: Establish baseline allocations with FIRST strategy
 			{
 				Config: testAccPoolResourceConfigWithStrategy("10.0.0.0/24", "FIRST", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
@@ -400,14 +402,14 @@ func TestAccPoolResource_StrategyInPlaceMutation(t *testing.T) {
 			// Stateful hydration must preserve subnet_a at .0/28 without moving it.
 			{
 				Config: testAccPoolResourceConfigWithStrategy("10.0.0.0/24", "SPARSE", `
-					subnet_a = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					subnet_b = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						subnet_a = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						subnet_b = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocation_strategy", "SPARSE"),
@@ -444,18 +446,18 @@ func TestAccPoolResource_InvalidNamespace(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: testAccPoolResourceConfigWithStrategy("10.0.0.0/24", "FIRST", `
-					invalid_namespace_subnet = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						invalid_namespace_subnet = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`) + `
-					// Overwrite with an invalid configuration character (colon)
-					resource "cidrblock_pool" "invalid" {
-					  cidr         = "10.0.0.0/24"
-					  organization = "corporate:finance" // Fails regex validation
-					  project      = "valid-proj"
-					  network      = "valid-net"
-					}
+						// Overwrite with an invalid configuration character (colon)
+						resource "cidrblock_pool" "invalid" {
+						  cidr         = "10.0.0.0/24"
+						  organization = "corporate:finance" // Fails regex validation
+						  project      = "valid-proj"
+						  network      = "valid-net"
+						}
 				`,
 				ExpectError: regexp.MustCompile("Invalid Namespace Boundary"),
 			},
@@ -470,10 +472,10 @@ func TestAccPoolResource_CreateWithSibling(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					subnet_with_immediate_sibling = {
-						prefix_size     = 28
-						reserve_sibling = true // Checked during initial create
-					}
+						subnet_with_immediate_sibling = {
+								prefix_size     = 28
+								reserve_sibling = true // Checked during initial create
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_with_immediate_sibling.allocated_cidr", "10.0.0.0/28"),
@@ -491,11 +493,11 @@ func TestAccDataSource_MalformedID(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: `
-					provider "cidrblock" {}
-					data "cidrblock_pool" "malformed" {
-						id   = "broken-string-missing-colons" // Triggers error parsing logic
-						cidr = "10.0.0.0/24"
-					}
+						provider "cidrblock" {}
+						data "cidrblock_pool" "malformed" {
+								id   = "broken-string-missing-colons" // Triggers error parsing logic
+								cidr = "10.0.0.0/24"
+						}
 				`,
 				ExpectError: regexp.MustCompile("Invalid Pool ID"),
 			},
@@ -512,29 +514,29 @@ func TestAccPoolResource_FrameworkFaults(t *testing.T) {
 			// 1. Force engine initialization failure path via malformed base CIDR
 			{
 				Config: `
-					resource "cidrblock_pool" "fault_cidr" {
-						cidr         = "invalid-cidr-string"
-						organization = "ops"
-						project      = "infra"
-						network      = "core"
-					}
+						resource "cidrblock_pool" "fault_cidr" {
+								cidr         = "invalid-cidr-string"
+								organization = "ops"
+								project      = "infra"
+								network      = "core"
+						}
 				`,
 				ExpectError: regexp.MustCompile("Invalid Base Pool Prefix"),
 			},
 			// 2. Force allocation execution crash via impossible layout sizing requests
 			{
 				Config: `
-					resource "cidrblock_pool" "fault_alloc" {
-						cidr         = "10.0.0.0/28"
-						organization = "ops"
-						project      = "infra"
-						network      = "core"
-						allocations = {
-							oversized = {
-								prefix_size = 24 // Too large for a /28 pool container
-							}
+						resource "cidrblock_pool" "fault_alloc" {
+								cidr         = "10.0.0.0/28"
+								organization = "ops"
+								project      = "infra"
+								network      = "core"
+								allocations = {
+										oversized = {
+												prefix_size = 24 // Too large for a /28 pool container
+										}
+								}
 						}
-					}
 				`,
 				ExpectError: regexp.MustCompile("Allocation Failed"),
 			},
@@ -550,23 +552,23 @@ func TestAccPoolResource_UpdateWithNewSibling(t *testing.T) {
 			// Initialize standard base block layout
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					initial_subnet = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						initial_subnet = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 			},
 			// Inject a completely new map element containing an active sibling reservation on update
 			{
 				Config: testAccPoolResourceConfig("10.0.0.0/24", `
-					initial_subnet = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					brand_new_subnet = {
-						prefix_size     = 28
-						reserve_sibling = true
-					}
+						initial_subnet = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						brand_new_subnet = {
+								prefix_size     = 28
+								reserve_sibling = true
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.brand_new_subnet.allocated_cidr", "10.0.0.32/28"),
@@ -584,11 +586,11 @@ func TestAccDataSource_FaultPaths(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: `
-					provider "cidrblock" {}
-					data "cidrblock_pool" "faulty" {
-						id   = "org:project:net:10.0.0.0/24"
-						cidr = "broken-cidr-format"
-					}
+						provider "cidrblock" {}
+						data "cidrblock_pool" "faulty" {
+								id   = "org:project:net:10.0.0.0/24"
+								cidr = "broken-cidr-format"
+						}
 				`,
 				ExpectError: regexp.MustCompile("Engine Creation Failed"),
 			},
@@ -605,12 +607,12 @@ func TestAccPoolResource_FrameworkFallbacks(t *testing.T) {
 			// 1. Create a pool completely empty of allocations to clear the Create fallback blocks
 			{
 				Config: `
-					resource "cidrblock_pool" "empty_test" {
-						cidr         = "10.0.0.0/24"
-						organization = "minimal"
-						project      = "clean-slate"
-						network      = "dev"
-					}
+						resource "cidrblock_pool" "empty_test" {
+								cidr         = "10.0.0.0/24"
+								organization = "minimal"
+								project      = "clean-slate"
+								network      = "dev"
+						}
 				`,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.empty_test", "allocation_strategy", "FIRST"),
@@ -619,17 +621,17 @@ func TestAccPoolResource_FrameworkFallbacks(t *testing.T) {
 			// 2. Add an impossible allocation dynamically during update to trigger the modification error paths
 			{
 				Config: `
-					resource "cidrblock_pool" "empty_test" {
-						cidr         = "10.0.0.0/24"
-						organization = "minimal"
-						project      = "clean-slate"
-						network      = "dev"
-						allocations = {
-							impossible_subnet = {
-								prefix_size = 16 // Invalid size for a /24 container pool
-							}
+						resource "cidrblock_pool" "empty_test" {
+								cidr         = "10.0.0.0/24"
+								organization = "minimal"
+								project      = "clean-slate"
+								network      = "dev"
+								allocations = {
+										impossible_subnet = {
+												prefix_size = 16 // Invalid size for a /24 container pool
+										}
+								}
 						}
-					}
 				`,
 				ExpectError: regexp.MustCompile("Pool Allocation Failed"),
 			},
@@ -644,11 +646,11 @@ func TestAccDataSource_EmptyInputs(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: `
-					provider "cidrblock" {}
-					data "cidrblock_pool" "empty_fault" {
-						id   = "" // Empty inputs trigger short circuit return blocks
-						cidr = ""
-					}
+						provider "cidrblock" {}
+						data "cidrblock_pool" "empty_fault" {
+								id   = "" // Empty inputs trigger short circuit return blocks
+								cidr = ""
+						}
 				`,
 				ExpectError: regexp.MustCompile("Missing Parameters"), // Fix: Synchronize with our internal data source error diagnostic title
 			},
@@ -666,14 +668,14 @@ func TestAccPoolResource_FirstFitDecreasingLifecycle(t *testing.T) {
 			// FFD sorting intercepts this and evaluates 'a_large_tier' first, preventing fragmentation dead-zones.
 			{
 				Config: testAccPoolResourceConfig("10.80.0.0/24", `
-					z_small_tier = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					a_large_tier = {
-						prefix_size     = 26
-						reserve_sibling = false
-					}
+						z_small_tier = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						a_large_tier = {
+								prefix_size     = 26
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.a_large_tier.allocated_cidr", "10.80.0.0/26"),
@@ -685,18 +687,18 @@ func TestAccPoolResource_FirstFitDecreasingLifecycle(t *testing.T) {
 			// The new /27 medium tier aligns cleanly onto the next available boundaries at .96/27.
 			{
 				Config: testAccPoolResourceConfig("10.80.0.0/24", `
-					z_small_tier = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					a_large_tier = {
-						prefix_size     = 26
-						reserve_sibling = false
-					}
-					m_medium_tier = {
-						prefix_size     = 27
-						reserve_sibling = false
-					}
+						z_small_tier = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						a_large_tier = {
+								prefix_size     = 26
+								reserve_sibling = false
+						}
+						m_medium_tier = {
+								prefix_size     = 27
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.a_large_tier.allocated_cidr", "10.80.0.0/26"),
@@ -715,13 +717,13 @@ func TestAccPoolResource_FirstFitDecreasingLifecycle(t *testing.T) {
 			// Because allocation_strategy is Computed, omitting it triggers our provider fallback value ("FIRST").
 			{
 				Config: `
-					provider "cidrblock" {}
-					resource "cidrblock_pool" "test" {
-					  cidr         = "10.80.0.0/24"
-					  organization = "test-org"
-					  project      = "test-project"
-					  network      = "test-network"
-					}
+						provider "cidrblock" {}
+						resource "cidrblock_pool" "test" {
+						  cidr         = "10.80.0.0/24"
+						  organization = "test-org"
+						  project      = "test-project"
+						  network      = "test-network"
+						}
 				`,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "cidr", "10.80.0.0/24"),
@@ -740,37 +742,37 @@ func TestAccPoolResource_SafetyGuardrailDestruction(t *testing.T) {
 			// Step 1: Initialize with safety flag enabled and a test subnet
 			{
 				Config: `
-					provider "cidrblock" {
-						prevent_subnet_destruction = true
-					}
-					resource "cidrblock_pool" "secure" {
-						cidr         = "10.90.0.0/24"
-						organization = "sec"
-						project      = "ops"
-						network      = "main"
-						allocations = {
-							important_service = {
-								prefix_size     = 26
-								reserve_sibling = false
-							}
+						provider "cidrblock" {
+								prevent_subnet_destruction = true
 						}
-					}
+						resource "cidrblock_pool" "secure" {
+								cidr         = "10.90.0.0/24"
+								organization = "sec"
+								project      = "ops"
+								network      = "main"
+								allocations = {
+										important_service = {
+												prefix_size     = 26
+												reserve_sibling = false
+										}
+								}
+						}
 				`,
 				Check: resource.TestCheckResourceAttr("cidrblock_pool.secure", "allocations.important_service.allocated_cidr", "10.90.0.0/26"),
 			},
 			// Step 2: Attempt to wipe the subnet key out of the block. The provider must fail the run.
 			{
 				Config: `
-					provider "cidrblock" {
-						prevent_subnet_destruction = true
-					}
-					resource "cidrblock_pool" "secure" {
-						cidr         = "10.90.0.0/24"
-						organization = "sec"
-						project      = "ops"
-						network      = "main"
-						allocations  = {}
-					}
+						provider "cidrblock" {
+								prevent_subnet_destruction = true
+						}
+						resource "cidrblock_pool" "secure" {
+								cidr         = "10.90.0.0/24"
+								organization = "sec"
+								project      = "ops"
+								network      = "main"
+								allocations  = {}
+						}
 				`,
 				ExpectError: regexp.MustCompile("Subnet Destruction Blocked"),
 			},
@@ -788,14 +790,14 @@ func TestAccPoolResource_UpdateValidationFailure(t *testing.T) {
 			// the target update block onto an unaligned offset address (.16/28).
 			{
 				Config: testAccPoolResourceConfig("10.75.0.0/24", `
-					a_anchor_subnet = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					z_unaligned_subnet = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
+						a_anchor_subnet = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						z_unaligned_subnet = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
 				`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.a_anchor_subnet.allocated_cidr", "10.75.0.0/28"),
@@ -806,14 +808,14 @@ func TestAccPoolResource_UpdateValidationFailure(t *testing.T) {
 			// This breaks binary tree boundaries and forces an UpdateAllocation alignment error pass.
 			{
 				Config: testAccPoolResourceConfig("10.75.0.0/24", `
-					a_anchor_subnet = {
-						prefix_size     = 28
-						reserve_sibling = false
-					}
-					z_unaligned_subnet = {
-						prefix_size     = 27
-						reserve_sibling = false
-					}
+						a_anchor_subnet = {
+								prefix_size     = 28
+								reserve_sibling = false
+						}
+						z_unaligned_subnet = {
+								prefix_size     = 27
+								reserve_sibling = false
+						}
 				`),
 				// Fix: Shortened to a wrap-proof substring because the Terraform CLI text-wraps
 				// long diagnostic details, breaking multi-word checks that happen to cross line breaks.

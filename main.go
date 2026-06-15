@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp and Contributors. All rights reserved.
+// Copyright (c) Finext Networks. All rights reserved.
 // SPDX-License-Identifier: MPL-2.0
 
 // Package main provides the entry point for the Terraform Provider.

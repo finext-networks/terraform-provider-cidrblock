@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp and Contributors. All rights reserved.
+// Copyright (c) Finext Networks. All rights reserved.
 // SPDX-License-Identifier: MPL-2.0
 
 package provider
@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -23,6 +24,7 @@ import (
 var (
 	_ resource.Resource                = (*poolResource)(nil)
 	_ resource.ResourceWithImportState = (*poolResource)(nil)
+	_ resource.ResourceWithModifyPlan  = (*poolResource)(nil) // Enforces collection-aware plan modification lifecycle
 )
 
 type poolResource struct {
@@ -64,56 +66,148 @@ func (r *poolResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 		Description: "Manages an atomic IP address prefix pool allocation layout grid.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Description: "The unique composite namespace identifier for the allocation pool managed by the provider engine.",
+				Computed:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"cidr": schema.StringAttribute{
-				Required: true,
+				Description: "The master base CIDR block assigned to this routing zone (e.g., 10.0.0.0/16). Modifying this forces pool replacement.",
+				Required:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"organization": schema.StringAttribute{
-				Required: true,
+				Description: "The top-level business organization name owning the network domain namespace context.",
+				Required:    true,
 			},
 			"project": schema.StringAttribute{
-				Required: true,
+				Description: "The infrastructure engineering project target scope linking the underlying networks.",
+				Required:    true,
 			},
 			"network": schema.StringAttribute{
-				Required: true,
+				Description: "The descriptive segment name identifier for the network footprint.",
+				Required:    true,
 			},
 			"allocation_strategy": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Algorithmic layout search strategy choice (FIRST, BEST, SPARSE). Defaults to FIRST.",
+				Description: "Algorithmic layout search strategy choice used when packing blocks (FIRST, BEST, SPARSE). Defaults to FIRST.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"allocations": schema.MapNestedAttribute{
-				Optional: true,
+				Description: "The complete map of nested subnets to algorithmically pack inside the master pool bounds.",
+				Optional:    true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"prefix_size": schema.Int64Attribute{
-							Required: true,
+							Description: "The IPv4 or IPv6 subnet mask bit length representing the allocation size.",
+							Required:    true,
 						},
 						"reserve_sibling": schema.BoolAttribute{
-							Optional: true,
-							Computed: true,
+							Description: "Toggle to automatically reserve an adjacent mathematical buddy block. Defaults to false if omitted.",
+							Optional:    true,
+							Computed:    true,
+							Default:     booldefault.StaticBool(false),
 						},
 						"allocated_cidr": schema.StringAttribute{
-							Computed: true,
+							Description: "The calculated base network address block computed by the IPAM engine.",
+							Computed:    true,
+							// Static plan modifiers removed: handled dynamically via collection-aware ModifyPlan
 						},
 						"sibling_cidr": schema.StringAttribute{
-							Computed: true,
+							Description: "The calculated companion network reservation footprint computed by the IPAM engine.",
+							Computed:    true,
+							// Static plan modifiers removed: handled dynamically via collection-aware ModifyPlan
 						},
 					},
 				},
 			},
 		},
 	}
+}
+
+// ModifyPlan manages granular changes across map attributes without introducing plan-vs-apply semantic gaps.
+func (r *poolResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	// Use pointers so the framework can cleanly assign 'nil' if the entire State (on Create) or Plan (on Destroy) is Null
+	var state *poolResourceModel
+	var plan *poolResourceModel
+
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// If the resource is being created fresh (state is null) or destroyed (plan is null), pass through standard mutations
+	if state == nil || plan == nil {
+		return
+	}
+
+	// Bypass logical patching if allocation boundaries are null or unassigned
+	if state.Allocations.IsNull() || state.Allocations.IsUnknown() || plan.Allocations.IsNull() || plan.Allocations.IsUnknown() {
+		return
+	}
+
+	var stateAllocs map[string]allocationModel
+	var planAllocs map[string]allocationModel
+
+	resp.Diagnostics.Append(state.Allocations.ElementsAs(ctx, &stateAllocs, false)...)
+	resp.Diagnostics.Append(plan.Allocations.ElementsAs(ctx, &planAllocs, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	allocObjectType := types.ObjectType{
+		AttrTypes: map[string]attr.Type{
+			"prefix_size":     types.Int64Type,
+			"reserve_sibling": types.BoolType,
+			"allocated_cidr":  types.StringType,
+			"sibling_cidr":    types.StringType,
+		},
+	}
+
+	resultElements := make(map[string]attr.Value)
+
+	for k, planAlloc := range planAllocs {
+		stateAlloc, exists := stateAllocs[k]
+
+		if exists {
+			// If configuration input states are identical, reuse old state coordinates to suppress plan diff noise
+			if planAlloc.PrefixSize.ValueInt64() == stateAlloc.PrefixSize.ValueInt64() &&
+				planAlloc.ReserveSibling.ValueBool() == stateAlloc.ReserveSibling.ValueBool() {
+				planAlloc.AllocatedCIDR = stateAlloc.AllocatedCIDR
+				planAlloc.SiblingCIDR = stateAlloc.SiblingCIDR
+			} else {
+				// Inputs changed: Force computation back to Unknown to accurately render (known after apply)
+				planAlloc.AllocatedCIDR = types.StringUnknown()
+				planAlloc.SiblingCIDR = types.StringUnknown()
+			}
+		} else {
+			// Key is brand new: Maintain dynamic evaluation states so the execution pipeline compiles accurately
+			planAlloc.AllocatedCIDR = types.StringUnknown()
+			planAlloc.SiblingCIDR = types.StringUnknown()
+		}
+
+		objVal, diags := types.ObjectValue(allocObjectType.AttrTypes, map[string]attr.Value{
+			"prefix_size":     planAlloc.PrefixSize,
+			"reserve_sibling": planAlloc.ReserveSibling,
+			"allocated_cidr":  planAlloc.AllocatedCIDR,
+			"sibling_cidr":    planAlloc.SiblingCIDR,
+		})
+		resp.Diagnostics.Append(diags...)
+		resultElements[k] = objVal
+	}
+
+	mapVal, diags := types.MapValue(allocObjectType, resultElements)
+	resp.Diagnostics.Append(diags...)
+	plan.Allocations = mapVal
+
+	resp.Diagnostics.Append(resp.Plan.Set(ctx, plan)...)
 }
 
 func (r *poolResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -209,7 +303,10 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 		}
 
 		stateRecord, _ := eng.GetAllocation(k)
-		siblingVal := types.StringValue("")
+
+		// Map structural empty strings from the IPAM engine out to explicit Framework Null values
+		// to enforce structural compliance with pre-computed planner layout shapes.
+		siblingVal := types.StringNull()
 		if stateRecord.SiblingCIDR != "" {
 			siblingVal = types.StringValue(stateRecord.SiblingCIDR)
 		}
@@ -356,7 +453,9 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 			}
 
 			updated, _ := eng.GetAllocation(k)
-			siblingVal := types.StringValue("")
+
+			// Maintain layout synchronization by mapping empty sibling blocks to clear framework nulls
+			siblingVal := types.StringNull()
 			if updated.SiblingCIDR != "" {
 				siblingVal = types.StringValue(updated.SiblingCIDR)
 			}
@@ -379,7 +478,9 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		}
 
 		stateRecord, _ := eng.GetAllocation(k)
-		siblingVal := types.StringValue("")
+
+		// Maintain layout synchronization by mapping empty sibling blocks to clear framework nulls
+		siblingVal := types.StringNull()
 		if stateRecord.SiblingCIDR != "" {
 			siblingVal = types.StringValue(stateRecord.SiblingCIDR)
 		}
