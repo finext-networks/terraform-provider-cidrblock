@@ -18,6 +18,9 @@ jobs:
   goreleaser:
     name: Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Allows GoReleaser to create the release and upload assets
+      packages: write   # Optional: if you publish to GitHub Packages
     steps:
       - uses: actions/checkout@v6
         with:
