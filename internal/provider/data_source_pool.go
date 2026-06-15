@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/finext-networks/terraform-provider-cidrblock/internal/ipam"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -18,6 +19,33 @@ import (
 var (
 	_ datasource.DataSource = (*poolDataSource)(nil)
 )
+
+// RegistryAllocation maps layout specs natively for memory serialization.
+type RegistryAllocation struct {
+	PrefixSize     int64
+	ReserveSibling bool
+	AllocatedCIDR  string
+	SiblingCIDR    string
+}
+
+// RegistryPool aggregates master pool specs across lifecycle boundaries.
+type RegistryPool struct {
+	CIDR               string
+	AllocationStrategy string
+	Allocations        map[string]RegistryAllocation
+}
+
+var (
+	poolRegistryMu sync.RWMutex
+	poolRegistry   = make(map[string]RegistryPool)
+)
+
+// PublishPoolState allows mutable resources to broadcast allocation topologies.
+func PublishPoolState(registryKey string, pool RegistryPool) {
+	poolRegistryMu.Lock()
+	defer poolRegistryMu.Unlock()
+	poolRegistry[registryKey] = pool
+}
 
 // poolDataSourceModel details tracking values exposed by the read-only data source block.
 type poolDataSourceModel struct {
@@ -47,27 +75,32 @@ func (d *poolDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 		Description: "Reads a CIDR block pool's state, showing current allocations, available slices, and usage metrics.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Description: "The pool ID to query (format: organization:project:network).",
-				Required:    true,
+				Description: "The unique composite identifier string for the pool. Optional if organization, project, and network are provided.",
+				Optional:    true,
+				Computed:    true,
 			},
 			"cidr": schema.StringAttribute{
-				Description: "The base IPv4/IPv6 supernet CIDR. Required to compute available slices and metrics.",
-				Required:    true,
+				Description: "The base IPv4/IPv6 supernet CIDR block assigned to this routing container. Required if 'id' is omitted.",
+				Optional:    true,
+				Computed:    true,
 			},
 			"organization": schema.StringAttribute{
-				Description: "The calculated top-level business organization name parsed from the composite identifier token.",
+				Description: "The top-level business organization name owning the network domain context.",
+				Optional:    true,
 				Computed:    true,
 			},
 			"project": schema.StringAttribute{
-				Description: "The calculated infrastructure engineering project target scope parsed from the composite identifier token.",
+				Description: "The infrastructure engineering project target scope.",
+				Optional:    true,
 				Computed:    true,
 			},
 			"network": schema.StringAttribute{
-				Description: "The calculated segment name identifier parsed from the composite identifier token.",
+				Description: "The descriptive segment name identifier for the network grid.",
+				Optional:    true,
 				Computed:    true,
 			},
 			"allocation_strategy": schema.StringAttribute{
-				Description: "The default or calculated algorithmic layout search criteria strategy active on the pool.",
+				Description: "The active search criteria packing algorithm assigned to this pool context (FIRST, BEST, SPARSE).",
 				Computed:    true,
 			},
 			"allocations": schema.MapNestedAttribute{
@@ -143,30 +176,84 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
-	poolID := data.ID.ValueString()
-	cidr := data.CIDR.ValueString()
+	var registryKey string
+	var cidrStr string
 
-	if poolID == "" || cidr == "" {
-		resp.Diagnostics.AddError("Missing Parameters", "Both ID and CIDR inputs must be provided.")
-		return
+	// Check if a non-empty composite ID token string has been explicitly provided
+	idProvided := !data.ID.IsNull() && !data.ID.IsUnknown() && data.ID.ValueString() != ""
+
+	if idProvided {
+		parts := strings.Split(data.ID.ValueString(), ":")
+		if len(parts) < 4 {
+			resp.Diagnostics.AddAttributeError(path.Root("id"), "Invalid Pool ID", "Must conform to standard 4-part format: organization:project:network:cidr")
+			return
+		}
+		// Capture the exact 4-part identifier from the composite token split
+		registryKey = parts[0] + ":" + parts[1] + ":" + parts[2] + ":" + parts[3]
+		cidrStr = parts[3]
+
+		// If an explicit CIDR configuration attribute is also provided, prioritize it to validate formatting
+		if !data.CIDR.IsNull() && !data.CIDR.IsUnknown() && data.CIDR.ValueString() != "" {
+			if data.CIDR.ValueString() != cidrStr {
+				cidrStr = data.CIDR.ValueString()
+			}
+		}
+
+		data.Organization = types.StringValue(parts[0])
+		data.Project = types.StringValue(parts[1])
+		data.Network = types.StringValue(parts[2])
+		data.CIDR = types.StringValue(cidrStr)
+	} else {
+		// Discrete attributes route: Ensure all required parameters are non-empty and present
+		if data.Organization.IsNull() || data.Organization.IsUnknown() || data.Organization.ValueString() == "" ||
+			data.Project.IsNull() || data.Project.IsUnknown() || data.Project.ValueString() == "" ||
+			data.Network.IsNull() || data.Network.IsUnknown() || data.Network.ValueString() == "" ||
+			data.CIDR.IsNull() || data.CIDR.IsUnknown() || data.CIDR.ValueString() == "" {
+			resp.Diagnostics.AddError(
+				"Missing Parameters",
+				"To execute a pool query, you must either provide a non-empty composite token 'id' OR all four matching discrete coordinates ('organization', 'project', 'network', 'cidr').",
+			)
+			return
+		}
+
+		cidrStr = data.CIDR.ValueString()
+		registryKey = data.Organization.ValueString() + ":" + data.Project.ValueString() + ":" + data.Network.ValueString() + ":" + cidrStr
+		data.ID = types.StringValue(registryKey)
 	}
 
-	// Deconstruct the synthetic token ID to rehydrate configuration attributes
-	parts := strings.Split(poolID, ":")
-	if len(parts) < 3 {
-		resp.Diagnostics.AddAttributeError(path.Root("id"), "Invalid Pool ID", "Must contain organization:project:network")
-		return
+	var strategyStr string
+	var allocRecords map[string]RegistryAllocation
+
+	// Query the global memory pool using the comprehensive 4-part key contract
+	poolRegistryMu.RLock()
+	pool, exists := poolRegistry[registryKey]
+	poolRegistryMu.RUnlock()
+
+	if exists {
+		strategyStr = pool.AllocationStrategy
+		allocRecords = pool.Allocations
+	} else {
+		// Clean fallback protection for early cold-start planning phases
+		strategyStr = "FIRST"
+		allocRecords = make(map[string]RegistryAllocation)
 	}
 
-	data.Organization = types.StringValue(parts[0])
-	data.Project = types.StringValue(parts[1])
-	data.Network = types.StringValue(parts[2])
-	data.AllocationStrategy = types.StringValue("FIRST")
+	data.AllocationStrategy = types.StringValue(strategyStr)
 
-	eng, err := ipam.NewEngine(cidr)
+	eng, err := ipam.NewEngine(cidrStr)
 	if err != nil {
 		resp.Diagnostics.AddError("Engine Creation Failed", err.Error())
 		return
+	}
+
+	// Rehydrate the isolated calculation engine with live parameters found in the shared store
+	for k, v := range allocRecords {
+		eng.RegisterExistingAllocation(k, &ipam.Allocation{
+			PrefixSize:     int(v.PrefixSize),
+			ReserveSibling: v.ReserveSibling,
+			AllocatedCIDR:  v.AllocatedCIDR,
+			SiblingCIDR:    v.SiblingCIDR,
+		})
 	}
 
 	// 1. Process and bind pool utilization math metrics objects
@@ -208,7 +295,7 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	resp.Diagnostics.Append(diags...)
 	data.AvailableSlices = listVal
 
-	// 3. Instantiate an empty allocation map token baseline
+	// 3. Hydrate and map live allocations back into the data source state collection
 	allocTypes := map[string]attr.Type{
 		"prefix_size":     types.Int64Type,
 		"reserve_sibling": types.BoolType,
@@ -216,7 +303,24 @@ func (d *poolDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		"sibling_cidr":    types.StringType,
 	}
 
-	mapVal, diags := types.MapValue(types.ObjectType{AttrTypes: allocTypes}, map[string]attr.Value{})
+	resultElements := make(map[string]attr.Value)
+	for k, v := range allocRecords {
+		siblingVal := types.StringNull()
+		if v.SiblingCIDR != "" {
+			siblingVal = types.StringValue(v.SiblingCIDR)
+		}
+
+		objVal, diags := types.ObjectValue(allocTypes, map[string]attr.Value{
+			"prefix_size":     types.Int64Value(v.PrefixSize),
+			"reserve_sibling": types.BoolValue(v.ReserveSibling),
+			"allocated_cidr":  types.StringValue(v.AllocatedCIDR),
+			"sibling_cidr":    siblingVal,
+		})
+		resp.Diagnostics.Append(diags...)
+		resultElements[k] = objVal
+	}
+
+	mapVal, diags := types.MapValue(types.ObjectType{AttrTypes: allocTypes}, resultElements)
 	resp.Diagnostics.Append(diags...)
 	data.Allocations = mapVal
 

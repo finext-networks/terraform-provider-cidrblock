@@ -320,15 +320,15 @@ func TestAccDataSource_Basic(t *testing.T) {
 						}
 				`) + `
 						data "cidrblock_pool" "test" {
-								id   = "test-org:test-project:test-network"
-								cidr = "10.0.0.0/24"
+								id = "test-org:test-project:test-network:10.0.0.0/24"
 						}
 				`,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("data.cidrblock_pool.test", "id", "test-org:test-project:test-network"),
+					resource.TestCheckResourceAttr("data.cidrblock_pool.test", "id", "test-org:test-project:test-network:10.0.0.0/24"),
 					resource.TestCheckResourceAttr("data.cidrblock_pool.test", "organization", "test-org"),
 					resource.TestCheckResourceAttr("data.cidrblock_pool.test", "project", "test-project"),
 					resource.TestCheckResourceAttr("data.cidrblock_pool.test", "network", "test-network"),
+					resource.TestCheckResourceAttr("data.cidrblock_pool.test", "cidr", "10.0.0.0/24"),
 					resource.TestCheckResourceAttr("data.cidrblock_pool.test", "metrics.total_ips", "256"),
 				),
 			},
@@ -820,6 +820,133 @@ func TestAccPoolResource_UpdateValidationFailure(t *testing.T) {
 				// Fix: Shortened to a wrap-proof substring because the Terraform CLI text-wraps
 				// long diagnostic details, breaking multi-word checks that happen to cross line breaks.
 				ExpectError: regexp.MustCompile("breaks binary alignment"),
+			},
+		},
+	})
+}
+
+// TestAccPoolDataSource_HydratedLifecycle verifies that the read-only data source
+// successfully pulls from the backend state grid and yields fully accurate allocation maps,
+// tracking strategies, available structural slices, and matching calculation metrics.
+func TestAccPoolDataSource_HydratedLifecycle(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create a live pool with a complex mix of sibling reservations
+			// and anti-optimal sizing alignments under the BEST strategy.
+			{
+				Config: testAccPoolResourceConfigWithStrategy("192.168.0.0/16", "BEST", `
+						management = {
+								prefix_size     = 24
+								reserve_sibling = false
+						}
+						appliances = {
+								prefix_size     = 23
+								reserve_sibling = true
+						}
+						pods = {
+								prefix_size     = 20
+								reserve_sibling = true
+						}
+						junk = {
+								prefix_size     = 18
+								reserve_sibling = false
+						}
+						wan = {
+								prefix_size     = 24
+								reserve_sibling = false
+						}
+				`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("cidrblock_pool.test", "id", "test-org:test-project:test-network:192.168.0.0/16"),
+				),
+			},
+			// Step 2: Query the pool state via the data source using the computed resource attributes.
+			// This explicitly checks that the data source engine hydrates and calculates active metrics
+			// rather than returning a blank, unallocated /16 block.
+			{
+				Config: testAccPoolResourceConfigWithStrategy("192.168.0.0/16", "BEST", `
+						management = {
+								prefix_size     = 24
+								reserve_sibling = false
+						}
+						appliances = {
+								prefix_size     = 23
+								reserve_sibling = true
+						}
+						pods = {
+								prefix_size     = 20
+								reserve_sibling = true
+						}
+						junk = {
+								prefix_size     = 18
+								reserve_sibling = false
+						}
+						wan = {
+								prefix_size     = 24
+								reserve_sibling = false
+						}
+				`) + `
+						data "cidrblock_pool" "hydrated_check" {
+								id   = cidrblock_pool.test.id
+								cidr = cidrblock_pool.test.cidr
+						}
+				`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// Assert basic system identity parameters are cleanly parsed
+					resource.TestCheckResourceAttr("data.cidrblock_pool.hydrated_check", "id", "test-org:test-project:test-network:192.168.0.0/16"),
+					resource.TestCheckResourceAttr("data.cidrblock_pool.hydrated_check", "organization", "test-org"),
+					resource.TestCheckResourceAttr("data.cidrblock_pool.hydrated_check", "project", "test-project"),
+					resource.TestCheckResourceAttr("data.cidrblock_pool.hydrated_check", "network", "test-network"),
+					resource.TestCheckResourceAttr("data.cidrblock_pool.hydrated_check", "allocation_strategy", "BEST"),
+
+					// Assert calculations metrics match our exact mathematical targets:
+					// Total pool size (/16) = 65536 IPs
+					resource.TestCheckResourceAttr("data.cidrblock_pool.hydrated_check", "metrics.total_ips", "65536"),
+					// Allocated base entries: /24(256) + /23(512) + /20(4096) + /18(16384) + /24(256) = 21504 IPs
+					resource.TestCheckResourceAttr("data.cidrblock_pool.hydrated_check", "metrics.allocated_ips", "21504"),
+					// Active shadow buddy blocks: /23(512) appliances companion + /20(4096) pods companion = 4608 IPs
+					resource.TestCheckResourceAttr("data.cidrblock_pool.hydrated_check", "metrics.reserved_ips", "4608"),
+					// Total remaining capacity: 65536 - (21504 + 4608) = 39424 IPs
+					resource.TestCheckResourceAttr("data.cidrblock_pool.hydrated_check", "metrics.available_ips", "39424"),
+
+					// Assert key allocations are exposed with accurate network values inside the map schema
+					resource.TestCheckResourceAttrSet("data.cidrblock_pool.hydrated_check", "allocations.management.allocated_cidr"),
+					resource.TestCheckResourceAttrSet("data.cidrblock_pool.hydrated_check", "allocations.pods.sibling_cidr"),
+				),
+			},
+		},
+	})
+}
+
+// TestAccPoolDataSource_ValidationErrors handles data source sad paths.
+// It verifies that missing input states and corrupted structural lookups
+// throw predictable, clean errors to user terminals rather than execution panics.
+func TestAccPoolDataSource_ValidationErrors(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// 1. Force the short-circuit breakout by omitting the required ID token fields entirely
+			{
+				Config: `
+						provider "cidrblock" {}
+						data "cidrblock_pool" "empty_fault" {
+								id   = "" 
+								cidr = "10.0.0.0/24"
+						}
+				`,
+				ExpectError: regexp.MustCompile("Missing Parameters"),
+			},
+			// 2. Force a parsing crash by feeding an invalid, split-proof identifier block
+			{
+				Config: `
+						provider "cidrblock" {}
+						data "cidrblock_pool" "malformed_id" {
+								id   = "broken_string_no_colons"
+								cidr = "10.0.0.0/24"
+						}
+				`,
+				ExpectError: regexp.MustCompile("Invalid Pool ID"),
 			},
 		},
 	})
