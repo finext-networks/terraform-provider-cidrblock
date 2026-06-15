@@ -13,18 +13,18 @@ import (
 	"sort"
 )
 
-// Strategy represents the layout positioning choice criteria used when 
+// Strategy represents the layout positioning choice criteria used when
 // selecting an unallocated space block from multiple available candidate gaps.
 type Strategy string
 
 const (
-	// StrategyFirst allocates the very first aligned address block that can fit 
+	// StrategyFirst allocates the very first aligned address block that can fit
 	// the requested prefix size, scanning from the lowest to highest address ranges.
-	StrategyFirst  Strategy = "FIRST"
+	StrategyFirst Strategy = "FIRST"
 
-	// StrategyBest selects the smallest available continuous unallocated slice 
+	// StrategyBest selects the smallest available continuous unallocated slice
 	// that can still accommodate the request, minimizing fragment size degradation.
-	StrategyBest   Strategy = "BEST"
+	StrategyBest Strategy = "BEST"
 
 	// StrategySparse selects the largest available continuous unallocated slice,
 	// maximizing isolation distance between independent subnet groups.
@@ -33,11 +33,11 @@ const (
 
 // Engine errors defining explicit boundary validation failures.
 var (
-	ErrPoolExhausted     = errors.New("pool exhausted: no available space for allocation")
-	ErrInvalidPrefix     = errors.New("invalid prefix size for address family")
+	ErrPoolExhausted      = errors.New("pool exhausted: no available space for allocation")
+	ErrInvalidPrefix      = errors.New("invalid prefix size for address family")
 	ErrAllocationNotFound = errors.New("allocation not found")
-	ErrDuplicateKey      = errors.New("allocation key already exists")
-	ErrInvalidPool       = errors.New("invalid pool CIDR")
+	ErrDuplicateKey       = errors.New("allocation key already exists")
+	ErrInvalidPool        = errors.New("invalid pool CIDR")
 )
 
 // Allocation models a single locked subnet space block tracked by the engine.
@@ -180,7 +180,7 @@ func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling boo
 
 		// INVALIDATION 1: Enforce base-address immutability
 		if proposedPrefix.Addr() != oldPrefix.Addr() {
-			return fmt.Errorf("increasing size to /%d breaks binary alignment boundaries at the current address %s (requires shifting base to %s). Subnets cannot be automatically relocated; delete and recreate the allocation to move it", 
+			return fmt.Errorf("increasing size to /%d breaks binary alignment boundaries at the current address %s (requires shifting base to %s). Subnets cannot be automatically relocated; delete and recreate the allocation to move it",
 				prefixSize, oldPrefix.Addr(), proposedPrefix.Addr())
 		}
 
@@ -218,7 +218,7 @@ func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling boo
 
 			// Calculate the new next-block sibling location
 			proposedSibling = netip.PrefixFrom(addBitOffset(proposedPrefix.Addr(), maxPrefix-prefixSize), prefixSize)
-			
+
 			// INVALIDATION 5: Verify the companion block falls inside pool boundaries
 			if !proposedSibling.IsValid() || !e.poolPrefix.Contains(proposedSibling.Addr()) {
 				return fmt.Errorf("the requested companion block falls outside the master pool boundaries. Toggle reserve_sibling to false")
@@ -232,14 +232,14 @@ func (e *Engine) UpdateAllocation(key string, prefixSize int, reserveSibling boo
 				if v.AllocatedCIDR != "" {
 					p, _ := netip.ParsePrefix(v.AllocatedCIDR)
 					if p.Overlaps(proposedSibling) {
-						return fmt.Errorf("the next continuous block (%s) is already occupied by allocation %q. Toggle reserve_sibling to false to expand in-place", 
+						return fmt.Errorf("the next continuous block (%s) is already occupied by allocation %q. Toggle reserve_sibling to false to expand in-place",
 							proposedSibling, k)
 					}
 				}
 				if v.SiblingCIDR != "" {
 					p, _ := netip.ParsePrefix(v.SiblingCIDR)
 					if p.Overlaps(proposedSibling) {
-						return fmt.Errorf("the next continuous block (%s) is already reserved as a sibling by allocation %q. Toggle reserve_sibling to false to expand in-place", 
+						return fmt.Errorf("the next continuous block (%s) is already reserved as a sibling by allocation %q. Toggle reserve_sibling to false to expand in-place",
 							proposedSibling, k)
 					}
 				}
@@ -310,7 +310,7 @@ func (e *Engine) Free(key string) error {
 	return nil
 }
 
-// AvailableSlices runs an optimized $O(M)$ step iteration through active maps 
+// AvailableSlices runs an optimized $O(M)$ step iteration through active maps
 // to extract discrete spans of remaining contiguous address gaps.
 func (e *Engine) AvailableSlices() []AvailableSlice {
 	maxBits := e.maxPrefix()
@@ -513,7 +513,7 @@ func (e *Engine) findGap(prefixSize int, reserveSibling bool, strategy Strategy)
 			}
 
 			if overlapFound {
-				// LEAP GUARDRAIL: Leap clean past the conflicting block footprint 
+				// LEAP GUARDRAIL: Leap clean past the conflicting block footprint
 				// to completely eliminate address-by-address linear scanning hangs
 				currentAddr = addBitOffset(conflictingPrefix.Masked().Addr(), maxBits-conflictingPrefix.Bits())
 				continue
@@ -616,22 +616,22 @@ func addBitOffset(addr netip.Addr, bitIndex int) netip.Addr {
 		}
 		b := addr.As4()
 		carry := uint32(1) << bitIndex
-		
+
 		// Upgrade calculations to uint64 to catch boundary wrap-around triggers safely
 		val := uint64(b[3]) | uint64(b[2])<<8 | uint64(b[1])<<16 | uint64(b[0])<<24
 		val += uint64(carry)
-		
+
 		if val > 0xFFFFFFFF {
 			return netip.Addr{} // Safely intercepts exact-edge overflows
 		}
-		
+
 		b[0] = byte(val >> 24)
 		b[1] = byte(val >> 16)
 		b[2] = byte(val >> 8)
 		b[3] = byte(val)
 		return netip.AddrFrom4(b)
 	}
-	
+
 	if bitIndex >= 128 {
 		return netip.Addr{}
 	}
@@ -658,4 +658,3 @@ func (e *Engine) maxPrefix() int {
 	}
 	return 128
 }
-

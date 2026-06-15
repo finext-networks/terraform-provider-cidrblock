@@ -50,7 +50,7 @@ func TestAccPoolResource_Basic(t *testing.T) {
 			{
 				ResourceName:            "cidrblock_pool.test",
 				ImportState:             true,
-				ImportStateVerify:        true,
+				ImportStateVerify:       true,
 				ImportStateVerifyIgnore: []string{"allocations", "allocation_strategy"}, // Fix: Ignore un-inferable strategy parameter on logical imports
 			},
 		},
@@ -352,7 +352,7 @@ resource "cidrblock_pool" "test" {
 `
 }
 
-// TestAccPoolResource_AlgorithmicBestFit verifies that the BEST strategy 
+// TestAccPoolResource_AlgorithmicBestFit verifies that the BEST strategy
 // isolates small fragments instead of breaking up larger free blocks.
 func TestAccPoolResource_AlgorithmicBestFit(t *testing.T) {
 	resource.Test(t, resource.TestCase{
@@ -396,7 +396,7 @@ func TestAccPoolResource_StrategyInPlaceMutation(t *testing.T) {
 					resource.TestCheckResourceAttr("cidrblock_pool.test", "allocations.subnet_a.allocated_cidr", "10.0.0.0/28"),
 				),
 			},
-			// Step 2: Swap the strategy to SPARSE in place. 
+			// Step 2: Swap the strategy to SPARSE in place.
 			// Stateful hydration must preserve subnet_a at .0/28 without moving it.
 			{
 				Config: testAccPoolResourceConfigWithStrategy("10.0.0.0/24", "SPARSE", `
@@ -503,7 +503,7 @@ func TestAccDataSource_MalformedID(t *testing.T) {
 	})
 }
 
-// TestAccPoolResource_FrameworkFaults executes schema validation errors, engine failures, 
+// TestAccPoolResource_FrameworkFaults executes schema validation errors, engine failures,
 // and deployment allocation crashes to cover provider diagnostic return paths.
 func TestAccPoolResource_FrameworkFaults(t *testing.T) {
 	resource.Test(t, resource.TestCase{
@@ -784,7 +784,7 @@ func TestAccPoolResource_UpdateValidationFailure(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
-			// Step 1: Initialize a stable layout where alphabetical sorting forces 
+			// Step 1: Initialize a stable layout where alphabetical sorting forces
 			// the target update block onto an unaligned offset address (.16/28).
 			{
 				Config: testAccPoolResourceConfig("10.75.0.0/24", `
@@ -815,11 +815,10 @@ func TestAccPoolResource_UpdateValidationFailure(t *testing.T) {
 						reserve_sibling = false
 					}
 				`),
-				// Fix: Shortened to a wrap-proof substring because the Terraform CLI text-wraps 
+				// Fix: Shortened to a wrap-proof substring because the Terraform CLI text-wraps
 				// long diagnostic details, breaking multi-word checks that happen to cross line breaks.
 				ExpectError: regexp.MustCompile("breaks binary alignment"),
 			},
 		},
 	})
 }
-

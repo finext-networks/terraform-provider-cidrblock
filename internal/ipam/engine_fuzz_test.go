@@ -44,7 +44,7 @@ func FuzzEngine_Allocation(f *testing.F) {
 		// 4. Anchor Mutation Validation Invariants
 		if err1 == nil {
 			oldPrefix := netip.MustParsePrefix(cidr1)
-			
+
 			// Attempt a size transformation up or down
 			newSize := size1 + 1
 			if size1 >= eng.maxPrefix() {
@@ -57,7 +57,7 @@ func FuzzEngine_Allocation(f *testing.F) {
 				if getErr != nil {
 					t.Fatalf("Failed to retrieve successfully updated allocation: %v", getErr)
 				}
-				
+
 				// CRITICAL INVARIANT: Base IP coordinate must never shift or float during an update operation
 				newPrefix := netip.MustParsePrefix(record.AllocatedCIDR)
 				if newPrefix.Addr() != oldPrefix.Addr() {
@@ -80,4 +80,3 @@ func FuzzEngine_Allocation(f *testing.F) {
 		}
 	})
 }
-

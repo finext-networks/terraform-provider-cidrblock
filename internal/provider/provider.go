@@ -79,4 +79,3 @@ func (p *cidrblockProvider) Resources(_ context.Context) []func() resource.Resou
 		NewPoolResource,
 	}
 }
-
