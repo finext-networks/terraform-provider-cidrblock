@@ -1,127 +1,176 @@
-# GCP VPC Subnet Architecture Example
-# Demonstrates FIRST, BEST, and SPARSE layout mechanics using identical subnet inputs
+# ==============================================================================
+# Core Provider & Variables Initialization
+# ==============================================================================
 
 terraform {
+  required_version = ">= 1.5.0"
   required_providers {
     cidrblock = {
       source = "finext-networks/cidrblock"
     }
     google = {
-      source = "hashicorp/google"
+      source  = "hashicorp/google"
+      version = "~> 5.0"
     }
   }
 }
 
 provider "cidrblock" {
-  prevent_subnet_destruction = false
+  # Safety Guardrail: Protects active production network interfaces 
+  prevent_subnet_destruction = true
 }
 
 provider "google" {
   project = var.project_id
-  region  = var.region
+  region  = var.region_primary
 }
 
-# =========================================================================
-# POOL 1: "FIRST" Strategy (Tight Bottom-Up Packing)
-# =========================================================================
-resource "cidrblock_pool" "pool_first" {
-  cidr                = "10.0.0.0/16"
-  organization        = var.organization
-  project             = var.project_id
-  network             = "vpc-first"
-  allocation_strategy = "FIRST"
+variable "project_id" {
+  type    = string
+  default = "finext-prod-mesh"
+}
 
+variable "region_primary" {
+  type    = string
+  default = "us-central1"
+}
+
+variable "region_backup" {
+  type    = string
+  default = "us-east1"
+}
+
+# ==============================================================================
+# Step 1: The Global IPAM Allocation Matrix
+# ==============================================================================
+
+resource "cidrblock_pool" "gcp_matrix" {
+  cidr                = "10.120.0.0/16"
+  organization        = "finext"
+  project             = "gke-production-mesh"
+  network             = "vpc-primary"
+  allocation_strategy = "BEST" # Packs ranges cleanly to optimize binary space
+
+  # ADVANCED GCP PACKING: Employs First-Fit Decreasing (FFD) size-sorting.
+  # This allows us to declare specialized GKE Pod and Service structures 
+  # alongside standard compute baselines without fragmentation overlap.
   allocations = {
-    gke_pods     = { prefix_size = 20, reserve_sibling = false } # Lands on 10.0.0.0/20
-    gke_nodes    = { prefix_size = 22, reserve_sibling = true  } # Lands on 10.0.16.0/22 (Sib: .20.0/22)
-    gke_services = { prefix_size = 22, reserve_sibling = false } # Lands on 10.0.24.0/22
-    vm_subnets   = { prefix_size = 24, reserve_sibling = false } # Lands on 10.0.28.0/24
+    # PASS 1: Sorted First (Largest block: /20 = 4,096 IPs).
+    # Lands on base 10.120.0.0/20. Dedicated to the dense GKE Pod network.
+    gke_pods_tier = {
+      prefix_size     = 20
+      reserve_sibling = false
+    }
+
+    # PASS 2: Sorted Second (Medium block: /22 = 1,024 IPs).
+    # Claims 10.120.16.0/22. Dedicated to GKE Cluster Services.
+    gke_services_tier = {
+      prefix_size     = 22
+      reserve_sibling = false
+    }
+
+    # PASS 3: Sorted Third (Standard block: /24 = 256 IPs). Tied with internal_compute.
+    # Wins alphabetical tie-breaker. Claims 10.120.20.0/24. Mapped to GKE Cluster Nodes.
+    gke_nodes_tier = {
+      prefix_size     = 24
+      reserve_sibling = false
+    }
+
+    # PASS 4: Sorted Fourth (Standard block: /24 = 256 IPs).
+    # Claims 10.120.21.0/24. Dedicated to core regional internal VMs.
+    # SIBLING EXPANSION: Setting reserve_sibling = true dynamically allocates an
+    # identical companion block at 10.120.22.0/24. We map the base to our primary region
+    # and the sibling to our backup region for a flawless Multi-Region DR setup.
+    internal_compute = {
+      prefix_size     = 24
+      reserve_sibling = true
+    }
   }
 }
 
-# =========================================================================
-# POOL 2: "BEST" Strategy (Tightest Fitting Free Slices)
-# =========================================================================
-resource "cidrblock_pool" "pool_best" {
-  cidr                = "10.1.0.0/16"
-  organization        = var.organization
-  project             = var.project_id
-  network             = "vpc-best"
-  allocation_strategy = "BEST"
+# ==============================================================================
+# Step 2: Real-Time Telemetry via Hydrated Data Source
+# ==============================================================================
 
-  allocations = {
-    gke_pods     = { prefix_size = 20, reserve_sibling = false } # Lands on 10.1.0.0/20
-    gke_nodes    = { prefix_size = 22, reserve_sibling = true  } # Lands on 10.1.16.0/22 (Sib: .20.0/22)
-    gke_services = { prefix_size = 22, reserve_sibling = false } # Lands on 10.1.24.0/22 (Fills the /22 fragment)
-    vm_subnets   = { prefix_size = 24, reserve_sibling = false } # Lands on 10.1.32.0/24
-  }
+# Accesses the shared memory registry via the 4-part composite identity token.
+# Yields instant capacity telemetry directly to the plan output window.
+data "cidrblock_pool" "telemetry" {
+  id = cidrblock_pool.gcp_matrix.id
 }
 
-# =========================================================================
-# POOL 3: "SPARSE" Strategy (Maximum Isolation Distance Scattering)
-# =========================================================================
-resource "cidrblock_pool" "pool_sparse" {
-  cidr                = "10.2.0.0/16"
-  organization        = var.organization
-  project             = var.project_id
-  network             = "vpc-sparse"
-  allocation_strategy = "SPARSE"
+# ==============================================================================
+# Step 3: Materialize Network Topologies inside Google Cloud
+# ==============================================================================
 
-  allocations = {
-    gke_pods     = { prefix_size = 20, reserve_sibling = false } # Lands on 10.2.0.0/20
-    gke_nodes    = { prefix_size = 22, reserve_sibling = true  } # Lands on 10.2.128.0/22 (Leaps to largest /17 slice)
-    gke_services = { prefix_size = 22, reserve_sibling = false } # Lands on 10.2.64.0/22  (Leaps to next largest /18 slice)
-    vm_subnets   = { prefix_size = 24, reserve_sibling = false } # Lands on 10.2.192.0/24 (Leaps to upper /18 slice)
-  }
-}
-
-# =========================================================================
-# Core Infrastructure Linkage
-# =========================================================================
-resource "google_compute_network" "vpc" {
-  name                    = "gcp-vpc-main"
+resource "google_compute_network" "hub_vpc" {
+  name                    = "vpc-production-mesh"
   auto_create_subnetworks = false
 }
 
-# Example subnet binding to the isolated SPARSE nodes allocation
-resource "google_compute_subnetwork" "gke_nodes_sparse" {
-  name          = "gke-nodes-isolated"
-  network       = google_compute_network.vpc.id
-  ip_cidr_range = cidrblock_pool.pool_sparse.allocations["gke_nodes"].allocated_cidr
-  region        = var.region
-}
+# The Primary Enterprise Subnetwork
+# Combines GKE Nodes, Pods, and Services into a unified, non-overlapping regional asset
+resource "google_compute_subnetwork" "primary_subnet" {
+  name          = "sb-us-central1-production"
+  network       = google_compute_network.hub_vpc.id
+  region        = var.region_primary
+  
+  # Primary range mapped to GKE worker nodes
+  ip_cidr_range = cidrblock_pool.gcp_matrix.allocations["gke_nodes_tier"].allocated_cidr
 
-# =========================================================================
-# Comparative Matrix Outputs
-# =========================================================================
+  # Secondary ranges mapped to GKE internal execution abstractions
+  secondary_ip_range {
+    range_name    = "gke-pods-secondary"
+    ip_cidr_range = cidrblock_pool.gcp_matrix.allocations["gke_pods_tier"].allocated_cidr
+  }
 
-output "matrix_first_sequential" {
-  value = {
-    pods     = cidrblock_pool.pool_first.allocations["gke_pods"].allocated_cidr
-    nodes    = cidrblock_pool.pool_first.allocations["gke_nodes"].allocated_cidr
-    sibling  = cidrblock_pool.pool_first.allocations["gke_nodes"].sibling_cidr
-    services = cidrblock_pool.pool_first.allocations["gke_services"].allocated_cidr
-    vms      = cidrblock_pool.pool_first.allocations["vm_subnets"].allocated_cidr
+  secondary_ip_range {
+    range_name    = "gke-services-secondary"
+    ip_cidr_range = cidrblock_pool.gcp_matrix.allocations["gke_services_tier"].allocated_cidr
+  }
+
+  secondary_ip_range {
+    range_name    = "internal-compute-primary"
+    ip_cidr_range = cidrblock_pool.gcp_matrix.allocations["internal_compute"].allocated_cidr
   }
 }
 
-output "matrix_best_compact" {
+# The Disaster Recovery Subnetwork (Cross-Region Standby)
+# Safely consumes the guaranteed unique sibling block calculated by the provider
+resource "google_compute_subnetwork" "dr_backup_subnet" {
+  name          = "sb-us-east1-disaster-recovery"
+  network       = google_compute_network.hub_vpc.id
+  region        = var.region_backup
+  
+  # Mapped cleanly to the calculated shadow companion block
+  ip_cidr_range = cidrblock_pool.gcp_matrix.allocations["internal_compute"].sibling_cidr
+}
+
+# ==============================================================================
+# Step 4: Verification & Capacity Analytics Outputs
+# ==============================================================================
+
+output "gcp_vpc_metadata" {
+  description = "The baseline infrastructure network configurations deployed to Google Cloud."
   value = {
-    pods     = cidrblock_pool.pool_best.allocations["gke_pods"].allocated_cidr
-    nodes    = cidrblock_pool.pool_best.allocations["gke_nodes"].allocated_cidr
-    sibling  = cidrblock_pool.pool_best.allocations["gke_nodes"].sibling_cidr
-    services = cidrblock_pool.pool_best.allocations["gke_services"].allocated_cidr
-    vms      = cidrblock_pool.pool_best.allocations["vm_subnets"].allocated_cidr
+    vpc_id            = google_compute_network.hub_vpc.id
+    primary_subnet    = google_compute_subnetwork.primary_subnet.id
+    dr_backup_subnet  = google_compute_subnetwork.dr_backup_subnet.id
+    ipam_routing_id   = data.cidrblock_pool.telemetry.id
   }
 }
 
-output "matrix_sparse_isolated" {
+output "ipam_pool_metrics" {
+  description = "Live utilization stats compiled from the global IPAM engine."
   value = {
-    pods     = cidrblock_pool.pool_sparse.allocations["gke_pods"].allocated_cidr
-    nodes    = cidrblock_pool.pool_sparse.allocations["gke_nodes"].allocated_cidr
-    sibling  = cidrblock_pool.pool_sparse.allocations["gke_nodes"].sibling_cidr
-    services = cidrblock_pool.pool_sparse.allocations["gke_services"].allocated_cidr
-    vms      = cidrblock_pool.pool_sparse.allocations["vm_subnets"].allocated_cidr
+    total_ips     = data.cidrblock_pool.telemetry.metrics.total_ips
+    allocated_ips = data.cidrblock_pool.telemetry.metrics.allocated_ips
+    reserved_ips  = data.cidrblock_pool.telemetry.metrics.reserved_ips
+    available_ips = data.cidrblock_pool.telemetry.metrics.available_ips
   }
+}
+
+output "unallocated_expansion_slices" {
+  description = "Contiguous unallocated chunks discovered inside the matrix. Use these for future node-pool scaling."
+  value       = data.cidrblock_pool.telemetry.available_slices
 }
 

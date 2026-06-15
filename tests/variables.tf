@@ -9,7 +9,7 @@ variable "allocation_strategy" {
 }
 
 variable "active_allocations" {
-  type        = map(object({
+  type = map(object({
     prefix_size     = number
     reserve_sibling = bool
   }))

@@ -4,7 +4,7 @@
 variables {
   supernet_cidr       = "10.200.0.0/16"
   allocation_strategy = "FIRST"
-  active_allocations  = {
+  active_allocations = {
     gke_pods = {
       prefix_size     = 20
       reserve_sibling = false

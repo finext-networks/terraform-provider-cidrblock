@@ -1,22 +1,25 @@
-# Azure VNet Subnet Topology Example
-# Leverages the cidrblock provider to orchestrate deterministic VNet and subnet topologies
+# ==============================================================================
+# Terraform Core & Provider Definitions
+# ==============================================================================
 
 terraform {
+  required_version = ">= 1.5.0"
   required_providers {
     cidrblock = {
       source = "finext-networks/cidrblock"
     }
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.0"
+      version = "~> 3.0" # Employs standard v3.x/v4.x Azure RM toolchains
     }
   }
 }
 
-# Provider configuration implementing production safety guardrails
+# Provider orchestration implementing advanced cloud state protections
 provider "cidrblock" {
-  # Safety Guardrail: Explicitly blocks any terraform apply passes that attempt
-  # to delete active subnet keys from an existing pool resource.
+  # Safety Switch: Actively blocks any 'terraform apply' execution that attempts
+  # to drop an active subnet key from the allocations map, protecting live 
+  # downstream Azure Virtual Network interfaces and private endpoints.
   prevent_subnet_destruction = true
 }
 
@@ -24,93 +27,192 @@ provider "azurerm" {
   features {}
 }
 
-# Define the IPAM calculation pool for the Azure landing zone
-resource "cidrblock_pool" "azure_subnets" {
-  cidr                = "10.10.0.0/16"
-  organization        = var.organization
-  project             = var.project_id
-  network             = "vnet-primary"
-  allocation_strategy = "FIRST"
+# ==============================================================================
+# Structural Input Variables
+# ==============================================================================
 
+variable "azure_region" {
+  type    = string
+  default = "eastus2"
+}
+
+variable "environment" {
+  type    = string
+  default = "production"
+}
+
+# ==============================================================================
+# Step 1: The Core IPAM Allocation Pool
+# ==============================================================================
+
+resource "cidrblock_pool" "vnet_matrix" {
+  cidr                = "10.200.0.0/16"
+  organization        = "finext"
+  project             = "azure-landing-zone"
+  network             = "vnet-primary"
+  allocation_strategy = "BEST" # Packs networks efficiently using best-fit binary tracking
+
+  # ADVANCED TRACKING: The underlying engine automatically sorts keys by network size
+  # descending (largest blocks first) to completely wipe out dead-space allocation gaps.
   allocations = {
-    # PASS 1: Evaluated First due to FFD Size Sorting (Largest footprint: /22).
-    # Claims the lowest naturally aligned free gap at 10.10.0.0/22.
-    # Spawns a left-hand aligned buddy reservation at 10.10.4.0/22 for zonal expansion.
-    # Total combined footprint consumed: 10.10.0.0 to 10.10.7.255
-    app_tier = {
-      prefix_size     = 22
+    # PASS 1: Sorted First (Largest block: /21 = 2048 IPs).
+    # Evaluated first due to FFD sorting, landing on the base: 10.200.0.0/21.
+    # Spawns its mathematical Availability Zone 2 shadow node-pool companion 
+    # cleanly at 10.200.8.0/21. Total space locked: 10.200.0.0 - 10.200.15.255.
+    aks_pods_tier = {
+      prefix_size     = 21
       reserve_sibling = true
     }
 
-    # PASS 2: Evaluated Second due to FFD Size Sorting (Smaller footprint: /24).
-    # Scans from the bottom of the pool, skipping past the active app_tier 
-    # and its locked buddy block space.
-    # Securely claims the next available aligned block boundary at 10.10.8.0/24.
-    web_tier = {
+    # PASS 2: Sorted Second (Medium block: /24 = 256 IPs). Tied with public_app_gw.
+    # Wins alphabetical tie-breaker. Aligns on next free block boundary: 10.200.16.0/24.
+    # Reserves its companion regional high-availability tier at 10.200.17.0/24.
+    app_service_integration = {
       prefix_size     = 24
+      reserve_sibling = true
+    }
+
+    # PASS 3: Sorted Third (Medium block: /24 = 256 IPs).
+    # Evaluated next. Safely skips past active app_service_integration boundaries 
+    # to claim 10.200.18.0/24. No sibling reservation required.
+    public_app_gw = {
+      prefix_size     = 24
+      reserve_sibling = false
+    }
+
+    # PASS 4: Sorted Fourth (Smallest block: /26 = 64 IPs).
+    # Matches strict Azure Bastion minimum requirement constraints. 
+    # Claims the clean, isolated boundary starting at 10.200.19.0/26.
+    bastion_tier = {
+      prefix_size     = 26
       reserve_sibling = false
     }
   }
 }
 
-# Core Azure Resource Group Container
-resource "azurerm_resource_group" "main" {
-  name     = "rg-${var.project_id}-networking"
-  location = var.azure_location
+# ==============================================================================
+# Step 2: Real-Time Telemetry via Hydrated Data Source
+# ==============================================================================
+
+# By passing the resource's computed 4-part composite ID token, this data source 
+# executes in-process immediately after the resource change, capturing calculated engine logs.
+data "cidrblock_pool" "telemetry" {
+  id = cidrblock_pool.vnet_matrix.id
 }
 
-# Base Azure Virtual Network (VNet) Container
-resource "azurerm_virtual_network" "main" {
-  name                = "vnet-primary"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  address_space       = [cidrblock_pool.azure_subnets.cidr]
+# ==============================================================================
+# Step 3: Materialize Network Topologies inside Azure
+# ==============================================================================
+
+resource "azurerm_resource_group" "network_holder" {
+  name     = "rg-${var.environment}-networking"
+  location = var.azure_region
 }
 
-# Active Application Subnet (Primary Zone)
-resource "azurerm_subnet" "app_active" {
-  name                 = "snet-app-active"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [cidrblock_pool.azure_subnets.allocations["app_tier"].allocated_cidr]
+resource "azurerm_virtual_network" "hub_vnet" {
+  name                = "vnet-${var.environment}-core"
+  resource_group_name = azurerm_resource_group.network_holder.name
+  location            = azurerm_resource_group.network_holder.location
+  address_space       = [cidrblock_pool.vnet_matrix.cidr]
+
+  tags = {
+    Environment = var.environment
+    ManagedBy   = "IPAM Engine"
+  }
 }
 
-# High-Availability Expansion Subnet (Secondary Zone)
-# Consumes the guaranteed uncollided forward sibling block calculated by the engine
-resource "azurerm_subnet" "app_expansion" {
-  name                 = "snet-app-ha-expansion"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [cidrblock_pool.azure_subnets.allocations["app_tier"].sibling_cidr]
+# --- Azure Kubernetes Service (AKS) Pod Subnets (Multi-Zone) ---
+
+resource "azurerm_subnet" "aks_zone_1" {
+  name                 = "snet-aks-nodepool-z1"
+  resource_group_name  = azurerm_resource_group.network_holder.name
+  virtual_network_name = azurerm_virtual_network.hub_vnet.name
+  address_prefixes     = [cidrblock_pool.vnet_matrix.allocations["aks_pods_tier"].allocated_cidr]
 }
 
-# DMZ Public Web Subnet
-resource "azurerm_subnet" "web" {
-  name                 = "snet-web"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [cidrblock_pool.azure_subnets.allocations["web_tier"].allocated_cidr]
+resource "azurerm_subnet" "aks_zone_2" {
+  name                 = "snet-aks-nodepool-z2"
+  resource_group_name  = azurerm_resource_group.network_holder.name
+  virtual_network_name = azurerm_virtual_network.hub_vnet.name
+  address_prefixes     = [cidrblock_pool.vnet_matrix.allocations["aks_pods_tier"].sibling_cidr]
 }
 
-# ==========================================
-# Topology Outputs
-# ==========================================
+# --- Azure App Service VNet Integration Subnets (High Availability) ---
 
-output "vnet_id" {
-  value = azurerm_virtual_network.main.id
+resource "azurerm_subnet" "app_service_primary" {
+  name                 = "snet-appservice-regional-01"
+  resource_group_name  = azurerm_resource_group.network_holder.name
+  virtual_network_name = azurerm_virtual_network.hub_vnet.name
+  address_prefixes     = [cidrblock_pool.vnet_matrix.allocations["app_service_integration"].allocated_cidr]
+
+  delegation {
+    name = "appservice-delegation"
+    service_delegation {
+      name    = "Microsoft.Web/serverFarms"
+      actions = ["Microsoft.Network/virtualNetworks/subnets/action"]
+    }
+  }
 }
 
-output "app_active_cidr" {
-  value = azurerm_subnet.app_active.address_prefixes[0]
+resource "azurerm_subnet" "app_service_secondary" {
+  name                 = "snet-appservice-regional-02"
+  resource_group_name  = azurerm_resource_group.network_holder.name
+  virtual_network_name = azurerm_virtual_network.hub_vnet.name
+  address_prefixes     = [cidrblock_pool.vnet_matrix.allocations["app_service_integration"].sibling_cidr]
+
+  delegation {
+    name = "appservice-delegation"
+    service_delegation {
+      name    = "Microsoft.Web/serverFarms"
+      actions = ["Microsoft.Network/virtualNetworks/subnets/action"]
+    }
+  }
 }
 
-output "app_expansion_reserved_sibling_cidr" {
-  value       = azurerm_subnet.app_expansion.address_prefixes[0]
-  description = "Verified, left-hand aligned buddy sibling used for seamless multi-zone clustering"
+# --- Azure Application Gateway Layer v2 ---
+
+resource "azurerm_subnet" "app_gateway" {
+  name                 = "snet-application-gateway"
+  resource_group_name  = azurerm_resource_group.network_holder.name
+  virtual_network_name = azurerm_virtual_network.hub_vnet.name
+  address_prefixes     = [cidrblock_pool.vnet_matrix.allocations["public_app_gw"].allocated_cidr]
 }
 
-output "web_cidr" {
-  value       = azurerm_subnet.web.address_prefixes[0]
-  description = "Calculated CIDR block for public web tier"
+# --- Azure Bastion Dedicated Management Subnet ---
+
+resource "azurerm_subnet" "bastion" {
+  # CRITICAL: Azure requires this exact literal naming convention for Bastion deployments
+  name                 = "AzureBastionSubnet" 
+  resource_group_name  = azurerm_resource_group.network_holder.name
+  virtual_network_name = azurerm_virtual_network.hub_vnet.name
+  address_prefixes     = [cidrblock_pool.vnet_matrix.allocations["bastion_tier"].allocated_cidr]
+}
+
+# ==============================================================================
+# Step 4: Verification & Capacity Planning Outputs
+# ==============================================================================
+
+output "azure_vnet_metadata" {
+  description = "The verified baseline networking blocks deployed to Microsoft Azure."
+  value = {
+    vnet_id          = azurerm_virtual_network.hub_vnet.id
+    address_space    = azurerm_virtual_network.hub_vnet.address_space[0]
+    composite_key_id = data.cidrblock_pool.telemetry.id
+  }
+}
+
+output "ipam_pool_metrics" {
+  description = "Live structural matrix capacities compiled out of the engine registry map."
+  value = {
+    total_ips     = data.cidrblock_pool.telemetry.metrics.total_ips
+    allocated_ips = data.cidrblock_pool.telemetry.metrics.allocated_ips
+    reserved_ips  = data.cidrblock_pool.telemetry.metrics.reserved_ips
+    available_ips = data.cidrblock_pool.telemetry.metrics.available_ips
+  }
+}
+
+output "unallocated_expansion_slices" {
+  description = "Contiguous unallocated chunks discovered inside the matrix. Use these boundaries for future Azure scale operations."
+  value       = data.cidrblock_pool.telemetry.available_slices
 }
 
