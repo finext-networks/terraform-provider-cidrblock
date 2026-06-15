@@ -27,24 +27,30 @@ resource "cidrblock_pool" "ipv4_pool" {
   organization        = "my-org"
   project             = "my-project"
   network             = "vpc-main"
-  allocation_strategy = "FIRST" # Alphabetical processing sequence applies over keys: backend, database, frontend
+  allocation_strategy = "FIRST"
 
+  # The provider automatically processes allocations using First-Fit Decreasing (FFD) order. 
+  # Subnets are sorted by largest block footprint first (smallest prefix bit length), 
+  # falling back to alphabetical sorting only as a deterministic tie-breaker.
   allocations = {
-    # 1. Processed First Alphabetically: /24 sizing lands on 10.0.0.0/24. 
-    # Valid: Left-hand aligned block, reserving 10.0.1.0/24 cleanly as its buddy partner.
-    backend = {
-      prefix_size     = 24
-      reserve_sibling = true
-    }
-
-    # 2. Processed Second: Requires a /22 boundary alignment. 
-    # Skips backend + reserved sibling footprint (10.0.0.0 - 10.0.1.255) to land on 10.0.4.0/22.
+    # 1. Processed First: Has the largest network footprint (/22 = 1024 IPs).
+    # Evaluated first due to size, landing squarely on the base boundary: 10.0.0.0/22.
     database = {
       prefix_size     = 22
       reserve_sibling = false
     }
 
-    # 3. Processed Third: Scans from bottom. Fills first available aligned gap at 10.0.2.0/24.
+    # 2. Processed Second: Tied on footprint size with frontend (/24 = 256 IPs).
+    # Wins the alphabetical tie-breaker. Skips database allocation to land on 10.0.4.0/24.
+    # Reserves adjacent shadow partner block 10.0.5.0/24 cleanly as its buddy partner.
+    backend = {
+      prefix_size     = 24
+      reserve_sibling = true
+    }
+
+    # 3. Processed Third: Tied on footprint size with backend (/24 = 256 IPs).
+    # Evaluated last due to alphabetical naming. Skips database, backend, and the 
+    # backend reserved sibling footprint to find the next aligned gap at 10.0.6.0/24.
     frontend = {
       prefix_size     = 24
       reserve_sibling = false
@@ -62,6 +68,10 @@ output "backend_cidr" {
 
 output "backend_sibling" {
   value = cidrblock_pool.ipv4_pool.allocations["backend"].sibling_cidr
+}
+
+output "database_cidr" {
+  value = cidrblock_pool.ipv4_pool.allocations["database"].allocated_cidr
 }
 ```
 

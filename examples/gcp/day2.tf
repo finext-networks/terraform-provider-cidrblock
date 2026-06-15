@@ -1,13 +1,17 @@
+# ==============================================================================
 # GCP VPC Subnet Architecture - Comprehensive Algorithmic Strategy Comparison
 # Simulates a Day 2 fragmented pool state to contrast FIRST, BEST, and SPARSE behaviors.
+# ==============================================================================
 
 terraform {
+  required_version = ">= 1.5.0"
   required_providers {
     cidrblock = {
       source = "finext-networks/cidrblock"
     }
     google = {
-      source = "hashicorp/google"
+      source  = "hashicorp/google"
+      version = "~> 5.0"
     }
   }
 }
@@ -22,19 +26,42 @@ provider "google" {
   region  = var.region
 }
 
+# ==============================================================================
+# Variables Definition Block
+# ==============================================================================
+
+variable "project_id" {
+  type        = string
+  description = "The target Google Cloud Platform project ID."
+  default     = "finext-brownfield-labs"
+}
+
+variable "region" {
+  type        = string
+  description = "The target GCP region for regional subnetwork assets."
+  default     = "us-west1"
+}
+
+variable "organization" {
+  type        = string
+  description = "The corporate organizational name tag identifier."
+  default     = "finext"
+}
+
 # Core GCP VPC Network where the calculated subnets will be provisioned
-resource "google_compute_network" "vpc" {
-  name                    = "gcp-vpc-production"
+resource "google_compute_network" "vpc_brownfield" {
+  name                    = "gcp-vpc-production-day2"
   auto_create_subnetworks = false
 }
 
-# =========================================================================
+# ==============================================================================
 # POOL 1: "FIRST" Strategy (Sequential Packing / Lowest Fit)
-# =========================================================================
-# Algorithm: Scans linearly from the lowest to highest address ranges. It claims 
-# the very first aligned gap that can accommodate the request, ignoring the size 
+# ==============================================================================
+# Algorithm: Scans linearly from the lowest to highest address ranges. It claims
+# the very first aligned gap that can accommodate the request, ignoring the size
 # of the surrounding empty space.
-# =========================================================================
+# ==============================================================================
+
 resource "cidrblock_pool" "pool_first" {
   cidr                = "10.50.0.0/16"
   organization        = var.organization
@@ -46,19 +73,19 @@ resource "cidrblock_pool" "pool_first" {
     # --- ACTIVE RETAINED WORKLOADS ---
     # FFD Pass 1 (/18): Anchored at 10.50.64.0/18  (Consumes: 10.50.64.0 - 10.50.127.255)
     gke_pods = { prefix_size = 18, reserve_sibling = false }
-    
+
     # FFD Pass 2 (/19): Anchored at 10.50.160.0/19 (Consumes: 10.50.160.0 - 10.50.191.255)
     gke_nodes = { prefix_size = 19, reserve_sibling = false }
-    
+
     # FFD Pass 3 (/19): Anchored at 10.50.192.0/19 (Consumes: 10.50.192.0 - 10.50.223.255)
     vm_subnets = { prefix_size = 19, reserve_sibling = false }
 
     # --- THE NEW DAY 2 REQUEST ---
     # History: 'legacy_frontend' (/18) was deleted from the bottom of the pool (10.50.0.0/18).
     # History: 'legacy_dmz' (/22) was deleted from the middle of the pool (10.50.128.0/22).
-    # Evaluation: FIRST starts scanning from 10.50.0.0. It immediately encounters the 
+    # Evaluation: FIRST starts scanning from 10.50.0.0. It immediately encounters the
     # large empty /18 gap. Because a /24 fits, it claims the front edge of it instantly.
-    # 
+    #
     # EXACT PLACEMENT: 10.50.0.0/24 (Fragments the pristine /18 block)
     bi_analytics = {
       prefix_size     = 24
@@ -67,13 +94,19 @@ resource "cidrblock_pool" "pool_first" {
   }
 }
 
-# =========================================================================
+# Hydrate 4-Part Telemetry Data Source for FIRST Pool
+data "cidrblock_pool" "telemetry_first" {
+  id = cidrblock_pool.pool_first.id
+}
+
+# ==============================================================================
 # POOL 2: "BEST" Strategy (Fragmentation Minimization / Tightest Fit)
-# =========================================================================
-# Algorithm: Evaluates all available open gaps across the entire pool. It selects 
-# the smallest continuous slice that can fit the request, intentionally preserving 
+# ==============================================================================
+# Algorithm: Evaluates all available open gaps across the entire pool. It selects
+# the smallest continuous slice that can fit the request, intentionally preserving
 # large open blocks for heavy-duty workloads.
-# =========================================================================
+# ==============================================================================
+
 resource "cidrblock_pool" "pool_best" {
   cidr                = "10.50.0.0/16"
   organization        = var.organization
@@ -101,13 +134,19 @@ resource "cidrblock_pool" "pool_best" {
   }
 }
 
-# =========================================================================
+# Hydrate 4-Part Telemetry Data Source for BEST Pool
+data "cidrblock_pool" "telemetry_best" {
+  id = cidrblock_pool.pool_best.id
+}
+
+# ==============================================================================
 # POOL 3: "SPARSE" Strategy (Maximum Isolation / Blast Radius Reduction)
-# =========================================================================
-# Algorithm: Sweeps all open layout fragments and intentionally claims the 
-# absolute largest contiguous block space chunk available, maximizing physical 
+# ==============================================================================
+# Algorithm: Sweeps all open layout fragments and intentionally claims the
+# absolute largest contiguous block space chunk available, maximizing physical
 # network distance between your subnets.
-# =========================================================================
+# ==============================================================================
+
 resource "cidrblock_pool" "pool_sparse" {
   cidr                = "10.50.0.0/16"
   organization        = var.organization
@@ -136,14 +175,19 @@ resource "cidrblock_pool" "pool_sparse" {
   }
 }
 
-# =========================================================================
+# Hydrate 4-Part Telemetry Data Source for SPARSE Pool
+data "cidrblock_pool" "telemetry_sparse" {
+  id = cidrblock_pool.pool_sparse.id
+}
+
+# ==============================================================================
 # REAL GOOGLE CLOUD SUBNETWORK PROVISIONING
-# =========================================================================
+# ==============================================================================
 
 # Subnet 1: Provisioned using the FIRST strategy output (Lands on 10.50.0.0/24)
 resource "google_compute_subnetwork" "analytics_subnet_first" {
   name          = "analytics-first-sequential"
-  network       = google_compute_network.vpc.id
+  network       = google_compute_network.vpc_brownfield.id
   ip_cidr_range = cidrblock_pool.pool_first.allocations["bi_analytics"].allocated_cidr
   region        = var.region
 }
@@ -151,7 +195,7 @@ resource "google_compute_subnetwork" "analytics_subnet_first" {
 # Subnet 2: Provisioned using the BEST strategy output (Lands on 10.50.128.0/24)
 resource "google_compute_subnetwork" "analytics_subnet_best" {
   name          = "analytics-best-compact"
-  network       = google_compute_network.vpc.id
+  network       = google_compute_network.vpc_brownfield.id
   ip_cidr_range = cidrblock_pool.pool_best.allocations["bi_analytics"].allocated_cidr
   region        = var.region
 }
@@ -159,21 +203,24 @@ resource "google_compute_subnetwork" "analytics_subnet_best" {
 # Subnet 3: Provisioned using the SPARSE strategy output (Lands on 10.50.0.0/24)
 resource "google_compute_subnetwork" "analytics_subnet_sparse" {
   name          = "analytics-sparse-isolated"
-  network       = google_compute_network.vpc.id
+  network       = google_compute_network.vpc_brownfield.id
   ip_cidr_range = cidrblock_pool.pool_sparse.allocations["bi_analytics"].allocated_cidr
   region        = var.region
 }
 
-# =========================================================================
+# ==============================================================================
 # COMPARATIVE MATRIX OUTPUTS
-# =========================================================================
+# ==============================================================================
 
 output "allocation_strategy_matrix" {
-  value = {
-    first_fit_range  = google_compute_subnetwork.analytics_subnet_first.ip_cidr_range
-    best_fit_range   = google_compute_subnetwork.analytics_subnet_best.ip_cidr_range
-    sparse_fit_range = google_compute_subnetwork.analytics_subnet_sparse.ip_cidr_range
-  }
   description = "Side-by-side empirical proof of different structural layouts on identical fragmented pools"
+  value = {
+    first_fit_range        = google_compute_subnetwork.analytics_subnet_first.ip_cidr_range
+    best_fit_range         = google_compute_subnetwork.analytics_subnet_best.ip_cidr_range
+    sparse_fit_range       = google_compute_subnetwork.analytics_subnet_sparse.ip_cidr_range
+    first_residual_slices  = data.cidrblock_pool.telemetry_first.available_slices
+    best_residual_slices   = data.cidrblock_pool.telemetry_best.available_slices
+    sparse_residual_slices = data.cidrblock_pool.telemetry_sparse.available_slices
+  }
 }
 

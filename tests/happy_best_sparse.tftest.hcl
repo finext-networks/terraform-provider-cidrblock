@@ -18,7 +18,7 @@ variables {
 run "verify_best_fit_execution" {
   # Executed as apply to populate dynamic calculation results
   command = apply
-  
+
   variables {
     allocation_strategy = "BEST"
   }
