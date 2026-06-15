@@ -321,6 +321,24 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 		resultElements[k] = objVal
 	}
 
+	// Broad-scale address mutations require updating the synchronized global thread-safe registry
+	// to expose the newly mapped network map to read-only data source consumers.
+	registryAllocs := make(map[string]RegistryAllocation)
+	for _, k := range keys {
+		stateRecord, _ := eng.GetAllocation(k)
+		registryAllocs[k] = RegistryAllocation{
+			PrefixSize:     int64(stateRecord.PrefixSize),
+			ReserveSibling: stateRecord.ReserveSibling,
+			AllocatedCIDR:  stateRecord.AllocatedCIDR,
+			SiblingCIDR:    stateRecord.SiblingCIDR,
+		}
+	}
+	PublishPoolState(org+":"+proj+":"+netw+":"+plan.CIDR.ValueString(), RegistryPool{
+		CIDR:               plan.CIDR.ValueString(),
+		AllocationStrategy: plan.AllocationStrategy.ValueString(),
+		Allocations:        registryAllocs,
+	})
+
 	if plan.Allocations.IsNull() {
 		plan.Allocations = types.MapNull(allocObjectType)
 	} else {
@@ -348,6 +366,40 @@ func (r *poolResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 			state.CIDR = types.StringValue(parts[3])
 		}
 	}
+
+	// --- Hydrate Global Registry for Read-Only Data Source Consumption ---
+	// This ensures subsequent plans or multi-resource apply lifecycles possess
+	// fully populated allocation matrices when new plugin processes are spawned.
+	if !state.Allocations.IsNull() && !state.Allocations.IsUnknown() {
+		var stateAllocs map[string]allocationModel
+		diags := state.Allocations.ElementsAs(ctx, &stateAllocs, false)
+		if !diags.HasError() {
+			registryAllocs := make(map[string]RegistryAllocation)
+			for k, v := range stateAllocs {
+				registryAllocs[k] = RegistryAllocation{
+					PrefixSize:     v.PrefixSize.ValueInt64(),
+					ReserveSibling: v.ReserveSibling.ValueBool(),
+					AllocatedCIDR:  v.AllocatedCIDR.ValueString(),
+					SiblingCIDR:    v.SiblingCIDR.ValueString(),
+				}
+			}
+
+			strat := "FIRST"
+			if !state.AllocationStrategy.IsNull() && !state.AllocationStrategy.IsUnknown() {
+				strat = state.AllocationStrategy.ValueString()
+			}
+
+			PublishPoolState(
+				state.Organization.ValueString()+":"+state.Project.ValueString()+":"+state.Network.ValueString()+":"+state.CIDR.ValueString(),
+				RegistryPool{
+					CIDR:               state.CIDR.ValueString(),
+					AllocationStrategy: strat,
+					Allocations:        registryAllocs,
+				},
+			)
+		}
+	}
+	// ---------------------------------------------------------------------
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -494,6 +546,24 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		resp.Diagnostics.Append(diags...)
 		resultElements[k] = objVal
 	}
+
+	// Update updates require the exact same registration serialization format to ensure
+	// state mutations propagate flawlessly across back-to-back lifecycle reads.
+	registryAllocs := make(map[string]RegistryAllocation)
+	for _, k := range keys {
+		stateRecord, _ := eng.GetAllocation(k)
+		registryAllocs[k] = RegistryAllocation{
+			PrefixSize:     int64(stateRecord.PrefixSize),
+			ReserveSibling: stateRecord.ReserveSibling,
+			AllocatedCIDR:  stateRecord.AllocatedCIDR,
+			SiblingCIDR:    stateRecord.SiblingCIDR,
+		}
+	}
+	PublishPoolState(plan.Organization.ValueString()+":"+plan.Project.ValueString()+":"+plan.Network.ValueString()+":"+plan.CIDR.ValueString(), RegistryPool{
+		CIDR:               plan.CIDR.ValueString(),
+		AllocationStrategy: plan.AllocationStrategy.ValueString(),
+		Allocations:        registryAllocs,
+	})
 
 	if plan.Allocations.IsNull() {
 		plan.Allocations = types.MapNull(allocObjectType)
