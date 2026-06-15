@@ -70,32 +70,32 @@ output "backend_sibling" {
 
 ### Required
 
-- `cidr` (String)
-- `network` (String)
-- `organization` (String)
-- `project` (String)
+- `cidr` (String) The master base CIDR block assigned to this routing zone (e.g., 10.0.0.0/16). Modifying this forces pool replacement.
+- `network` (String) The descriptive segment name identifier for the network footprint.
+- `organization` (String) The top-level business organization name owning the network domain namespace context.
+- `project` (String) The infrastructure engineering project target scope linking the underlying networks.
 
 ### Optional
 
-- `allocation_strategy` (String) Algorithmic layout search strategy choice (FIRST, BEST, SPARSE). Defaults to FIRST.
-- `allocations` (Attributes Map) (see [below for nested schema](#nestedatt--allocations))
+- `allocation_strategy` (String) Algorithmic layout search strategy choice used when packing blocks (FIRST, BEST, SPARSE). Defaults to FIRST.
+- `allocations` (Attributes Map) The complete map of nested subnets to algorithmically pack inside the master pool bounds. (see [below for nested schema](#nestedatt--allocations))
 
 ### Read-Only
 
-- `id` (String) The ID of this resource.
+- `id` (String) The unique composite namespace identifier for the allocation pool managed by the provider engine.
 
 <a id="nestedatt--allocations"></a>
 ### Nested Schema for `allocations`
 
 Required:
 
-- `prefix_size` (Number)
+- `prefix_size` (Number) The IPv4 or IPv6 subnet mask bit length representing the allocation size.
 
 Optional:
 
-- `reserve_sibling` (Boolean)
+- `reserve_sibling` (Boolean) Toggle to automatically reserve an adjacent mathematical buddy block. Defaults to false if omitted.
 
 Read-Only:
 
-- `allocated_cidr` (String)
-- `sibling_cidr` (String)
+- `allocated_cidr` (String) The calculated base network address block computed by the IPAM engine.
+- `sibling_cidr` (String) The calculated companion network reservation footprint computed by the IPAM engine.

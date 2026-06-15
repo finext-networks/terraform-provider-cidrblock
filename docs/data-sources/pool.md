@@ -22,23 +22,23 @@ Reads a CIDR block pool's state, showing current allocations, available slices, 
 
 ### Read-Only
 
-- `allocation_strategy` (String)
-- `allocations` (Attributes Map) (see [below for nested schema](#nestedatt--allocations))
-- `available_slices` (Attributes List) (see [below for nested schema](#nestedatt--available_slices))
-- `metrics` (Attributes) (see [below for nested schema](#nestedatt--metrics))
-- `network` (String)
-- `organization` (String)
-- `project` (String)
+- `allocation_strategy` (String) The default or calculated algorithmic layout search criteria strategy active on the pool.
+- `allocations` (Attributes Map) The complete map of nested subnet block structures packed inside this master routing container context. (see [below for nested schema](#nestedatt--allocations))
+- `available_slices` (Attributes List) The serialized listing of all remaining contiguous unallocated address blocks discovered inside the grid matrix. (see [below for nested schema](#nestedatt--available_slices))
+- `metrics` (Attributes) The statistical usage summary metrics detailing total capacity distributions calculated across the matrix. (see [below for nested schema](#nestedatt--metrics))
+- `network` (String) The calculated segment name identifier parsed from the composite identifier token.
+- `organization` (String) The calculated top-level business organization name parsed from the composite identifier token.
+- `project` (String) The calculated infrastructure engineering project target scope parsed from the composite identifier token.
 
 <a id="nestedatt--allocations"></a>
 ### Nested Schema for `allocations`
 
 Read-Only:
 
-- `allocated_cidr` (String)
-- `prefix_size` (Number)
-- `reserve_sibling` (Boolean)
-- `sibling_cidr` (String)
+- `allocated_cidr` (String) The calculated absolute base network address coordinate calculated by the distribution logic.
+- `prefix_size` (Number) The bit mask subnet size tier assigned to the allocation block.
+- `reserve_sibling` (Boolean) Indicates whether an adjacent mathematical shadow buddy block was explicitly requested.
+- `sibling_cidr` (String) The calculated backup shadow companion reservation coordinate calculated by the distribution logic.
 
 
 <a id="nestedatt--available_slices"></a>
@@ -46,8 +46,8 @@ Read-Only:
 
 Read-Only:
 
-- `max_prefix_size` (Number)
-- `start_cidr` (String)
+- `max_prefix_size` (Number) The maximum individual bit mask length that can fit cleanly inside this isolated open slice.
+- `start_cidr` (String) The network base prefix boundary coordinate where the open space chunk begins.
 
 
 <a id="nestedatt--metrics"></a>
@@ -55,7 +55,7 @@ Read-Only:
 
 Read-Only:
 
-- `allocated_ips` (Number)
-- `available_ips` (Number)
-- `reserved_ips` (Number)
-- `total_ips` (Number)
+- `allocated_ips` (Number) The raw count of addresses consumed inside user-defined allocation blocks.
+- `available_ips` (Number) The total residual capacity of freely assignable addresses remaining in the supernet bounds.
+- `reserved_ips` (Number) The raw count of addresses consumed inside active buddy-block backup sibling allocations.
+- `total_ips` (Number) The raw count of total possible address spaces contained globally across the supernet.

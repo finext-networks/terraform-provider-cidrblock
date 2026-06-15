@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp and Contributors. All rights reserved.
+// Copyright (c) Finext Networks. All rights reserved.
 // SPDX-License-Identifier: MPL-2.0
 
 package provider
@@ -55,63 +55,80 @@ func (d *poolDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				Required:    true,
 			},
 			"organization": schema.StringAttribute{
-				Computed: true,
+				Description: "The calculated top-level business organization name parsed from the composite identifier token.",
+				Computed:    true,
 			},
 			"project": schema.StringAttribute{
-				Computed: true,
+				Description: "The calculated infrastructure engineering project target scope parsed from the composite identifier token.",
+				Computed:    true,
 			},
 			"network": schema.StringAttribute{
-				Computed: true,
+				Description: "The calculated segment name identifier parsed from the composite identifier token.",
+				Computed:    true,
 			},
 			"allocation_strategy": schema.StringAttribute{
-				Computed: true,
+				Description: "The default or calculated algorithmic layout search criteria strategy active on the pool.",
+				Computed:    true,
 			},
 			"allocations": schema.MapNestedAttribute{
-				Computed: true,
+				Description: "The complete map of nested subnet block structures packed inside this master routing container context.",
+				Computed:    true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"prefix_size": schema.Int64Attribute{
-							Computed: true,
+							Description: "The bit mask subnet size tier assigned to the allocation block.",
+							Computed:    true,
 						},
 						"reserve_sibling": schema.BoolAttribute{
-							Computed: true,
+							Description: "Indicates whether an adjacent mathematical shadow buddy block was explicitly requested.",
+							Computed:    true,
 						},
 						"allocated_cidr": schema.StringAttribute{
-							Computed: true,
+							Description: "The calculated absolute base network address coordinate calculated by the distribution logic.",
+							Computed:    true,
 						},
 						"sibling_cidr": schema.StringAttribute{
-							Computed: true,
+							Description: "The calculated backup shadow companion reservation coordinate calculated by the distribution logic.",
+							Computed:    true,
 						},
 					},
 				},
 			},
 			"available_slices": schema.ListNestedAttribute{
-				Computed: true,
+				Description: "The serialized listing of all remaining contiguous unallocated address blocks discovered inside the grid matrix.",
+				Computed:    true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"start_cidr": schema.StringAttribute{
-							Computed: true,
+							Description: "The network base prefix boundary coordinate where the open space chunk begins.",
+							Computed:    true,
 						},
 						"max_prefix_size": schema.Int64Attribute{
-							Computed: true,
+							Description: "The maximum individual bit mask length that can fit cleanly inside this isolated open slice.",
+							Computed:    true,
 						},
 					},
 				},
 			},
 			"metrics": schema.SingleNestedAttribute{
-				Computed: true,
+				Description: "The statistical usage summary metrics detailing total capacity distributions calculated across the matrix.",
+				Computed:    true,
 				Attributes: map[string]schema.Attribute{
 					"total_ips": schema.Int64Attribute{
-						Computed: true,
+						Description: "The raw count of total possible address spaces contained globally across the supernet.",
+						Computed:    true,
 					},
 					"allocated_ips": schema.Int64Attribute{
-						Computed: true,
+						Description: "The raw count of addresses consumed inside user-defined allocation blocks.",
+						Computed:    true,
 					},
 					"reserved_ips": schema.Int64Attribute{
-						Computed: true,
+						Description: "The raw count of addresses consumed inside active buddy-block backup sibling allocations.",
+						Computed:    true,
 					},
 					"available_ips": schema.Int64Attribute{
-						Computed: true,
+						Description: "The total residual capacity of freely assignable addresses remaining in the supernet bounds.",
+						Computed:    true,
 					},
 				},
 			},
