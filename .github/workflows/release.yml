@@ -28,13 +28,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
 
-      # NEW: Robust GPG Import that handles passphrase and exports fingerprint
       - name: Import GPG key
         id: import_gpg
         uses: crazy-max/ghaction-import-gpg@v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }} # This is mandatory for decryption
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
@@ -43,7 +42,5 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Use the dynamic output from the import step
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
-          # GoReleaser needs the passphrase as an env var to sign the detached signatures
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }} # Required if your GPG key is password-protected
