@@ -3,7 +3,7 @@
 
 version: 2
 
-dist: .
+dist: ./dist
 
 env:
   - CGO_ENABLED=0

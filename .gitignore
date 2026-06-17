@@ -2,6 +2,8 @@
 terraform-provider-cidrblock
 terraform-provider-cidrblock.exe
 
+goreleaser
+
 # Dependencies
 vendor/
 
@@ -35,3 +37,4 @@ plan.md
 
 # No Fuzz
 **/testdata/fuzz/
+dist/
