@@ -18,9 +18,6 @@ jobs:
   goreleaser:
     name: Release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write   # Allows GoReleaser to create the release and upload assets
-      packages: write   # Optional: if you publish to GitHub Packages
     steps:
       - uses: actions/checkout@v6
         with:
@@ -31,11 +28,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
 
+      # NEW: Robust GPG Import that handles passphrase and exports fingerprint
       - name: Import GPG key
-        run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        id: import_gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
@@ -44,5 +43,7 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GPG_FINGERPRINT: ${{ secrets.GPG_FINGERPRINT }}
-
+          # Use the dynamic output from the import step
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+          # GoReleaser needs the passphrase as an env var to sign the detached signatures
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
