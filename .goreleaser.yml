@@ -47,9 +47,11 @@ checksum:
 signs:
   - cmd: gpg
     args:
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"  # This maps the secret to the command
       - "--output"
       - "${signature}"
-      - "--armor"
       - "--detach-sign"
       - "${artifact}"
     artifacts: checksum
