@@ -45,16 +45,15 @@ checksum:
   algorithm: sha256
 
 signs:
-  - cmd: gpg
+  - artifacts: checksum
     args:
       - "--batch"
       - "--local-user"
-      - "{{ .Env.GPG_FINGERPRINT }}"  # This maps the secret to the command
+      - "{{ .Env.GPG_FINGERPRINT }}" # Forces GPG to use the key imported by your action
       - "--output"
       - "${signature}"
       - "--detach-sign"
       - "${artifact}"
-    artifacts: checksum
 
 changelog:
   use: git
