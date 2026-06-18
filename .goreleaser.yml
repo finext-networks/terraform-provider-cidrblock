@@ -48,8 +48,13 @@ signs:
   - artifacts: checksum
     args:
       - "--batch"
+      - "yes"
+      - "--pinentry-mode"
+      - "loopback"
+      - "--passphrase"
+      - "{{ .Env.GPG_PASSPHRASE }}"
       - "--local-user"
-      - "{{ .Env.GPG_FINGERPRINT }}" # Forces GPG to use the key imported by your action
+      - "{{ .Env.GPG_FINGERPRINT }}"
       - "--output"
       - "${signature}"
       - "--detach-sign"
