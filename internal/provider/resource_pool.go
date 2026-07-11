@@ -551,7 +551,14 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	// state mutations propagate flawlessly across back-to-back lifecycle reads.
 	registryAllocs := make(map[string]RegistryAllocation)
 	for _, k := range keys {
-		stateRecord, _ := eng.GetAllocation(k)
+		stateRecord, err := eng.GetAllocation(k)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Allocation lookup failed during state serialization",
+				fmt.Sprintf("Unable to retrieve allocation %q from pool engine: %v", k, err),
+			)
+			return
+		}
 		registryAllocs[k] = RegistryAllocation{
 			PrefixSize:     int64(stateRecord.PrefixSize),
 			ReserveSibling: stateRecord.ReserveSibling,
