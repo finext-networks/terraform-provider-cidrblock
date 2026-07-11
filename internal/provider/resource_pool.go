@@ -414,7 +414,14 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	eng, _ := ipam.NewEngine(plan.CIDR.ValueString())
+	eng, err := ipam.NewEngine(plan.CIDR.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to initialize IPAM engine",
+			fmt.Sprintf("Failed to initialize IPAM engine from CIDR %q: %v", plan.CIDR.ValueString(), err),
+		)
+		return
+	}
 
 	strat := ipam.StrategyFirst
 	if !plan.AllocationStrategy.IsNull() && !plan.AllocationStrategy.IsUnknown() {
