@@ -529,7 +529,11 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 			return
 		}
 
-		stateRecord, _ := eng.GetAllocation(k)
+		stateRecord, err := eng.GetAllocation(k)
+		if err != nil {
+			resp.Diagnostics.AddError("Pool Allocation State Read Failed", fmt.Sprintf("Key %s: %s", k, err.Error()))
+			return
+		}
 
 		// Maintain layout synchronization by mapping empty sibling blocks to clear framework nulls
 		siblingVal := types.StringNull()
