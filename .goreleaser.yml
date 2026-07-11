@@ -29,8 +29,6 @@ builds:
     ignore:
       - goos: darwin
         goarch: amd64
-      - goos: windows
-        goarch: arm64
     flags:
       - -trimpath
     ldflags:
