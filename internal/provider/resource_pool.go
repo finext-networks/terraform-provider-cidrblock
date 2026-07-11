@@ -302,7 +302,11 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 			return
 		}
 
-		stateRecord, _ := eng.GetAllocation(k)
+		stateRecord, err := eng.GetAllocation(k)
+		if err != nil {
+			resp.Diagnostics.AddError("Allocation State Read Failed", fmt.Sprintf("Key %s: %s", k, err.Error()))
+			return
+		}
 
 		// Map structural empty strings from the IPAM engine out to explicit Framework Null values
 		// to enforce structural compliance with pre-computed planner layout shapes.
