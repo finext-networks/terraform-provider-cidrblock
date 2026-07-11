@@ -54,8 +54,8 @@ generate:
 ## tools: Install development tools
 .PHONY: tools
 tools:
-	go install github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@v0.19.0
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.59.1
 
 ## clean: Clean build artifacts and temporary testing environments
 .PHONY: clean
