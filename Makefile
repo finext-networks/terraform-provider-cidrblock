@@ -43,6 +43,8 @@ testacc:
 test-e2e: build
 	@echo "==> Constructing temporary developer runtime overrides..."
 	@echo 'provider_installation { dev_overrides { "finext-networks/cidrblock" = "$(shell pwd)" } direct {} }' > .terraformrc
+	@mkdir -p .git/info
+	@grep -qxF '.terraformrc' .git/info/exclude || echo '.terraformrc' >> .git/info/exclude
 	@echo "==> Running automated E2E integration test suites..."
 	@cd tests && TF_CLI_CONFIG_FILE=$$PWD/../.terraformrc terraform test
 
