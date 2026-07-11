@@ -302,7 +302,11 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 			return
 		}
 
-		stateRecord, _ := eng.GetAllocation(k)
+		stateRecord, err := eng.GetAllocation(k)
+		if err != nil {
+			resp.Diagnostics.AddError("Allocation State Read Failed", fmt.Sprintf("Key %s: %s", k, err.Error()))
+			return
+		}
 
 		// Map structural empty strings from the IPAM engine out to explicit Framework Null values
 		// to enforce structural compliance with pre-computed planner layout shapes.
@@ -414,7 +418,14 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	eng, _ := ipam.NewEngine(plan.CIDR.ValueString())
+	eng, err := ipam.NewEngine(plan.CIDR.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to initialize IPAM engine",
+			fmt.Sprintf("Failed to initialize IPAM engine from CIDR %q: %v", plan.CIDR.ValueString(), err),
+		)
+		return
+	}
 
 	strat := ipam.StrategyFirst
 	if !plan.AllocationStrategy.IsNull() && !plan.AllocationStrategy.IsUnknown() {
@@ -529,7 +540,11 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 			return
 		}
 
-		stateRecord, _ := eng.GetAllocation(k)
+		stateRecord, err := eng.GetAllocation(k)
+		if err != nil {
+			resp.Diagnostics.AddError("Pool Allocation State Read Failed", fmt.Sprintf("Key %s: %s", k, err.Error()))
+			return
+		}
 
 		// Maintain layout synchronization by mapping empty sibling blocks to clear framework nulls
 		siblingVal := types.StringNull()
@@ -551,7 +566,14 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	// state mutations propagate flawlessly across back-to-back lifecycle reads.
 	registryAllocs := make(map[string]RegistryAllocation)
 	for _, k := range keys {
-		stateRecord, _ := eng.GetAllocation(k)
+		stateRecord, err := eng.GetAllocation(k)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Allocation lookup failed during state serialization",
+				fmt.Sprintf("Unable to retrieve allocation %q from pool engine: %v", k, err),
+			)
+			return
+		}
 		registryAllocs[k] = RegistryAllocation{
 			PrefixSize:     int64(stateRecord.PrefixSize),
 			ReserveSibling: stateRecord.ReserveSibling,
