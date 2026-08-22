@@ -88,6 +88,11 @@ output "database_cidr" {
 ### Optional
 
 - `allocation_strategy` (String) Algorithmic layout search strategy choice used when packing blocks (FIRST, BEST, SPARSE). Defaults to FIRST.
+
+    * `FIRST`: Scans linearly from the lowest to highest address ranges. It claims the very first aligned gap that can accommodate the request, ignoring the size of the surrounding empty space.
+    * `BEST`: Evaluates all available open gaps across the entire pool. It selects the smallest continuous slice that can fit the request, intentionally preserving large open blocks for heavy-duty workloads.
+    * `SPARSE`: Sweeps all open layout fragments and intentionally claims the absolute largest contiguous block space chunk available, maximizing physical network distance between your subnets.
+
 - `allocations` (Attributes Map) The complete map of nested subnets to algorithmically pack inside the master pool bounds. (see [below for nested schema](#nestedatt--allocations))
 
 ### Read-Only
